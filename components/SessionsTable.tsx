@@ -297,7 +297,7 @@ const SessionsTable: React.FC<SessionsTableProps> = ({
                 onTouchStart={(e) => handleTouchStart(e, s)}
                 onTouchEnd={handleTouchEnd}
                 onTouchMove={handleTouchEnd}
-                className={`bg-white border-b hover:bg-gray-50 ${editingCell?.sessionId === s.id ? "bg-blue-50" : ""} ${isOverdue ? "bg-red-50/50" : ""}`}
+                className={`bg-white border-b hover:bg-gray-50 ${editingCell?.sessionId === s.id ? "bg-blue-50" : ""} ${isOverdue ? "bg-red-50/50" : ""} ${isTodaySession ? "bg-orange-50/60" : ""}`}
               >
                 <td
                   className={`px-2 sm:px-6 py-4 ${cellClasses}`}
@@ -341,7 +341,7 @@ const SessionsTable: React.FC<SessionsTableProps> = ({
                         </span>
                       )}
                       {isTodaySession && (
-                        <span className="px-1.5 py-0.5 bg-green-100 text-green-700 text-[10px] rounded-md font-bold">
+                        <span className="px-1.5 py-0.5 bg-orange-100 text-orange-800 border border-orange-300 text-[10px] rounded-md font-bold">
                           جلسة اليوم
                         </span>
                       )}

@@ -64,9 +64,11 @@ const Calendar: React.FC<CalendarProps> = ({
   const getEventsCountForDay = (day: Date) => {
     const daySessions = sessions.filter((s) => is_same_day(s.date, day));
     const isPast = is_before_today(day);
+    const isCurrentDay = is_today(day);
 
     let postponedCount = 0; // أخضر - جلسات مرحلة
-    let unpostponedCount = 0; // برتقالي - جلسات غير مرحلة (فائتة ولم ترحل)
+    let unpostponedCount = 0; // برتقالي داكن - جلسات غير مرحلة (فائتة)
+    let todayCount = 0; // برتقالي فاتح - جلسات اليوم
     let futureCount = 0; // أزرق - جلسات قادمة
 
     daySessions.forEach((s) => {
@@ -77,6 +79,8 @@ const Calendar: React.FC<CalendarProps> = ({
         postponedCount++;
       } else if (isPast) {
         unpostponedCount++;
+      } else if (isCurrentDay) {
+        todayCount++;
       } else {
         futureCount++;
       }
@@ -89,6 +93,7 @@ const Calendar: React.FC<CalendarProps> = ({
     return {
       postponedCount,
       unpostponedCount,
+      todayCount,
       futureCount,
       appointmentCount,
     };
@@ -128,6 +133,7 @@ const Calendar: React.FC<CalendarProps> = ({
           const {
             postponedCount,
             unpostponedCount,
+            todayCount,
             futureCount,
             appointmentCount,
           } = getEventsCountForDay(day);
@@ -147,7 +153,7 @@ const Calendar: React.FC<CalendarProps> = ({
               " bg-red-500 text-white font-bold shadow-sm hover:bg-red-600";
           } else if (isCurrentDay) {
             dayClasses +=
-              " bg-blue-50 text-blue-700 font-bold ring-1 ring-blue-200";
+              " bg-orange-100/90 text-orange-900 font-bold ring-2 ring-orange-400/80 hover:bg-orange-200/90";
           } else if (isWknd) {
             dayClasses +=
               " bg-pink-100/70 text-pink-800 hover:bg-pink-200/70";
@@ -174,10 +180,18 @@ const Calendar: React.FC<CalendarProps> = ({
                 )}
                 {unpostponedCount > 0 && (
                   <span
-                    className="flex items-center justify-center min-w-[1.25rem] h-5 px-1 text-[10px] font-bold text-white bg-orange-500 rounded-full shadow-sm"
+                    className="flex items-center justify-center min-w-[1.25rem] h-5 px-1 text-[10px] font-bold text-white bg-orange-600 rounded-full shadow-sm"
                     title={`${numberFormatter.format(unpostponedCount)} جلسات غير مرحلة`}
                   >
                     {numberFormatter.format(unpostponedCount)}
+                  </span>
+                )}
+                {todayCount > 0 && (
+                  <span
+                    className="flex items-center justify-center min-w-[1.25rem] h-5 px-1 text-[10px] font-bold text-white bg-orange-400 rounded-full shadow-sm"
+                    title={`${numberFormatter.format(todayCount)} جلسات اليوم`}
+                  >
+                    {numberFormatter.format(todayCount)}
                   </span>
                 )}
                 {futureCount > 0 && (

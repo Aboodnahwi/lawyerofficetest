@@ -31,6 +31,7 @@ import {
   to_input_date_string,
   is_holiday,
   safe_revive_date,
+  is_today,
 } from "../utils/dateUtils";
 import { generateId } from "../utils/idUtils";
 import { RealtimeAlert } from "../components/RealtimeNotifier";
@@ -1048,6 +1049,169 @@ export const useSupabaseData = (
       (s) => !s.is_postponed && !s.stage_decision_date && !s.next_session_date,
     );
   }, [all_sessions]);
+
+  // Alert for unpostponed today's sessions after 12:00 PM
+  const unpostponed_alert_tracker = React.useRef<{
+    date: string;
+    count: number;
+  }>({ date: "", count: 0 });
+
+  React.useEffect(() => {
+    const check_unpostponed_today_sessions = () => {
+      const now = new Date();
+      // Only check if time is past 12:00 PM (noon)
+      if (now.getHours() < 12) return;
+
+      const today_str = to_input_date_string(now);
+      const todays_unpostponed = unpostponed_sessions.filter((s) =>
+        is_today(s.date),
+      );
+      const count = todays_unpostponed.length;
+
+      if (count === 0) {
+        // If all today's sessions have been postponed/decided, clear any active alert
+        set_realtime_alerts((prev) =>
+          prev.filter((a) => a.type !== "unpostponed"),
+        );
+        return;
+      }
+
+      // If we haven't already alerted for today's date and count
+      if (
+        unpostponed_alert_tracker.current.date !== today_str ||
+        unpostponed_alert_tracker.current.count !== count
+      ) {
+        unpostponed_alert_tracker.current = { date: today_str, count };
+
+        const session_text =
+          count === 1
+            ? "جلسة واحدة اليوم لم ترحّل"
+            : count === 2
+            ? "جلسان اليوم لم ترحّلا"
+            : count >= 3 && count <= 10
+            ? `${count} جلسات اليوم لم ترحّل`
+            : `${count} جلسة اليوم لم ترحّل`;
+
+        set_realtime_alerts((prev) => [
+          ...prev.filter((a) => a.type !== "unpostponed"),
+          {
+            id: Date.now(),
+            message: `تنبيه بعد 12:00 ظهراً: يوجد ${session_text} بعد إلى جلسة قادمة.`,
+            type: "unpostponed",
+          },
+        ]);
+      }
+    };
+
+    check_unpostponed_today_sessions();
+
+    // Check periodically every minute
+    const intervalId = setInterval(check_unpostponed_today_sessions, 60000);
+    return () => clearInterval(intervalId);
+  }, [unpostponed_sessions]);
+
+  // Check for appointment reminders and trigger alerts
+  React.useEffect(() => {
+    const check_appointment_reminders = () => {
+      const appointmentsList = data.appointments;
+      if (!appointmentsList || appointmentsList.length === 0) return;
+
+      const now = new Date();
+      const nowMs = now.getTime();
+      const newAlerts: Appointment[] = [];
+      const notifiedApptIds: string[] = [];
+
+      appointmentsList.forEach((apt) => {
+        if (apt.completed || apt.notified) return;
+        if (!apt.date || !apt.time) return;
+
+        const datePart = apt.date.includes("T")
+          ? apt.date.split("T")[0]
+          : apt.date;
+        const dateTokens = datePart.split("-");
+        const timeTokens = apt.time.split(":");
+
+        if (dateTokens.length < 3 || timeTokens.length < 2) return;
+
+        const year = parseInt(dateTokens[0], 10);
+        const month = parseInt(dateTokens[1], 10);
+        const day = parseInt(dateTokens[2], 10);
+        const hour = parseInt(timeTokens[0], 10);
+        const minute = parseInt(timeTokens[1], 10);
+
+        if (
+          isNaN(year) ||
+          isNaN(month) ||
+          isNaN(day) ||
+          isNaN(hour) ||
+          isNaN(minute)
+        )
+          return;
+
+        const aptDate = new Date(year, month - 1, day, hour, minute, 0, 0);
+        const aptMs = aptDate.getTime();
+
+        const reminderMins =
+          typeof apt.reminder_time_in_minutes === "number"
+            ? apt.reminder_time_in_minutes
+            : 15;
+        const reminderMs = aptMs - reminderMins * 60 * 1000;
+
+        // Trigger if current time has reached/passed the reminder time,
+        // AND not passed appointment time by more than 3 hours.
+        if (nowMs >= reminderMs && nowMs <= aptMs + 3 * 60 * 60 * 1000) {
+          newAlerts.push(apt);
+          notifiedApptIds.push(apt.id);
+        }
+      });
+
+      if (newAlerts.length > 0) {
+        set_triggered_alerts((prev) => {
+          const existingIds = new Set(prev.map((a) => a.id));
+          const filteredNew = newAlerts.filter((a) => !existingIds.has(a.id));
+          if (filteredNew.length === 0) return prev;
+          return [...prev, ...filteredNew];
+        });
+
+        set_data((prev) => {
+          const updatedApps = prev.appointments.map((a) =>
+            notifiedApptIds.includes(a.id)
+              ? {
+                  ...a,
+                  notified: true,
+                  updated_at: new Date().toISOString(),
+                }
+              : a,
+          );
+          return { ...prev, appointments: updatedApps };
+        });
+
+        // Browser Native Push Notification fallback
+        if (typeof window !== "undefined" && "Notification" in window) {
+          if (Notification.permission === "granted") {
+            newAlerts.forEach((a) => {
+              try {
+                new Notification("⏰ تذكير بموعد: " + a.title, {
+                  body: `الموعد الساعة ${a.time} - المسند إليه: ${
+                    a.assignee || "غير محدد"
+                  }`,
+                  icon: "/favicon.ico",
+                  dir: "rtl",
+                  lang: "ar",
+                });
+              } catch (e) {
+                console.error("Browser notification error:", e);
+              }
+            });
+          }
+        }
+      }
+    };
+
+    check_appointment_reminders();
+    const intervalId = setInterval(check_appointment_reminders, 10000); // Check every 10 seconds
+    return () => clearInterval(intervalId);
+  }, [data.appointments]);
 
   const download_document_file = React.useCallback(
     async (doc: CaseDocument) => {

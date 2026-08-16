@@ -1396,7 +1396,7 @@ const HomePage: React.FC<HomePageProps> = ({
               </div>
               <button
                 onClick={handle_show_todays_agenda}
-                className={`w-full flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-2 px-1 sm:px-4 py-1.5 sm:py-2 text-white rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50 font-semibold ${view_mode === "daily" ? "bg-blue-700" : "bg-blue-600 hover:bg-blue-700"}`}
+                className={`w-full flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-2 px-1 sm:px-4 py-1.5 sm:py-2 text-white rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-opacity-50 font-semibold ${view_mode === "daily" ? "bg-orange-600" : "bg-orange-500 hover:bg-orange-600"}`}
               >
                 <CalendarIcon className="w-4 h-4 sm:w-5 sm:h-5" />
                 <span className="text-[10px] sm:text-sm text-center leading-tight">
@@ -1619,69 +1619,104 @@ const HomePage: React.FC<HomePageProps> = ({
           {admin_tasks_layout === "vertical" ? (
             <div className="flex flex-row gap-4 pt-4">
               {location_order.length > 0 && (
-                <nav
-                  className="flex flex-col gap-2 w-28 flex-shrink-0 sticky top-32 self-start"
-                  aria-label="Location Tabs"
-                >
-                  {location_order.map((location) => (
-                    <button
-                      key={location}
-                      onClick={() => set_active_location_tab(location)}
-                      draggable={active_task_tab === "pending"}
-                      onDragStart={(e) =>
-                        handle_drag_start(e, "group", location)
-                      }
-                      onDragEnd={handle_drag_end}
-                      onDragOver={(e) => {
-                        if (dragged_task_id.current) {
-                          e.preventDefault();
-                          set_drag_over_location(location);
-                        } else if (dragged_group_location) {
-                          e.preventDefault();
-                        }
-                      }}
-                      onDragLeave={() => set_drag_over_location(null)}
-                      onDrop={(e) => {
-                        set_drag_over_location(null);
-                        if (dragged_task_id.current) {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          handle_task_drop(null, location, "after");
-                        } else {
-                          if (active_task_tab !== "pending") return;
-                          e.preventDefault();
-                          e.stopPropagation();
-                          if (
-                            !dragged_group_location ||
+                <div className="flex flex-col gap-2 w-32 sm:w-40 flex-shrink-0 sticky top-32 self-start">
+                  <div className="flex items-center justify-between pb-2 px-1 border-b border-gray-200 mb-1">
+                    <span className="text-xs font-bold text-gray-700 uppercase tracking-wider">المكان</span>
+                    <span className="text-[11px] font-semibold text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full" title="إجمالي الأماكن">
+                      {location_order.length}
+                    </span>
+                  </div>
+                  <nav
+                    className="flex flex-col gap-1.5"
+                    aria-label="Location Tabs"
+                  >
+                    {location_order.map((location) => {
+                      const locationTasks = grouped_tasks[location] || [];
+                      const count = locationTasks.length;
+                      const hasUrgentTask =
+                        locationTasks.some((t) => t.importance === "urgent") ||
+                        admin_tasks.some(
+                          (t) =>
+                            (t.location || "غير محدد") === location &&
+                            !t.completed &&
+                            t.importance === "urgent",
+                        );
+                      const isSelected = active_location_tab === location;
+                      return (
+                        <button
+                          key={location}
+                          onClick={() => set_active_location_tab(location)}
+                          draggable={active_task_tab === "pending"}
+                          onDragStart={(e) =>
+                            handle_drag_start(e, "group", location)
+                          }
+                          onDragEnd={handle_drag_end}
+                          onDragOver={(e) => {
+                            if (dragged_task_id.current) {
+                              e.preventDefault();
+                              set_drag_over_location(location);
+                            } else if (dragged_group_location) {
+                              e.preventDefault();
+                            }
+                          }}
+                          onDragLeave={() => set_drag_over_location(null)}
+                          onDrop={(e) => {
+                            set_drag_over_location(null);
+                            if (dragged_task_id.current) {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              handle_task_drop(null, location, "after");
+                            } else {
+                              if (active_task_tab !== "pending") return;
+                              e.preventDefault();
+                              e.stopPropagation();
+                              if (
+                                !dragged_group_location ||
+                                dragged_group_location === location
+                              )
+                                return;
+                              const newOrder = [...location_order];
+                              const sourceIndex = newOrder.indexOf(
+                                dragged_group_location,
+                              );
+                              const targetIndex = newOrder.indexOf(location);
+                              if (sourceIndex === -1 || targetIndex === -1) return;
+                              const [movedItem] = newOrder.splice(sourceIndex, 1);
+                              newOrder.splice(targetIndex, 0, movedItem);
+                              set_location_order(newOrder);
+                              set_saved_location_order(newOrder);
+                            }
+                          }}
+                          className={`whitespace-normal break-words w-full text-right px-2.5 py-2 border-r-4 font-medium text-sm transition-colors duration-150 focus:outline-none rounded-l-md flex items-center justify-between gap-1.5 ${
+                            active_task_tab === "pending" ? "cursor-grab" : ""
+                          } ${
+                            hasUrgentTask
+                              ? isSelected
+                                ? "border-red-500 bg-red-100 text-red-900 font-bold shadow-xs"
+                                : "border-red-400 bg-red-50 text-red-800 hover:bg-red-100 font-medium"
+                              : isSelected
+                                ? "border-blue-500 bg-blue-50 text-blue-600 font-semibold"
+                                : "border-transparent text-gray-600 hover:bg-gray-100 bg-white"
+                          } ${
                             dragged_group_location === location
-                          )
-                            return;
-                          const newOrder = [...location_order];
-                          const sourceIndex = newOrder.indexOf(
-                            dragged_group_location,
-                          );
-                          const targetIndex = newOrder.indexOf(location);
-                          if (sourceIndex === -1 || targetIndex === -1) return;
-                          const [movedItem] = newOrder.splice(sourceIndex, 1);
-                          newOrder.splice(targetIndex, 0, movedItem);
-                          set_location_order(newOrder);
-                          set_saved_location_order(newOrder);
-                        }
-                      }}
-                      className={`whitespace-normal break-words w-full text-right px-2 py-2 border-r-4 font-medium text-sm transition-colors duration-150 focus:outline-none ${active_task_tab === "pending" ? "cursor-grab" : ""} ${
-                        active_location_tab === location
-                          ? "border-blue-500 bg-blue-50 text-blue-600 font-semibold"
-                          : "border-transparent text-gray-600 hover:bg-gray-100"
-                      } ${
-                        dragged_group_location === location
-                          ? "opacity-30"
-                          : "opacity-100"
-                      } ${drag_over_location === location ? "bg-blue-200 border-blue-500" : ""}`}
-                    >
-                      {location}
-                    </button>
-                  ))}
-                </nav>
+                              ? "opacity-30"
+                              : "opacity-100"
+                          } ${drag_over_location === location ? "bg-blue-200 border-blue-500" : ""}`}
+                        >
+                          <span className="truncate flex items-center gap-1.5">
+                            {location}
+                            {hasUrgentTask && (
+                              <span
+                                className="w-2 h-2 rounded-full bg-red-600 animate-pulse flex-shrink-0"
+                                title="يوجد مهمة عاجلة في هذا المكان"
+                              />
+                            )}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </nav>
+                </div>
               )}
               <div className="flex-grow min-w-0">
                 {location_order.length > 0 && active_location_tab ? (
@@ -1717,70 +1752,100 @@ const HomePage: React.FC<HomePageProps> = ({
             <div className="pt-4">
               {location_order.length > 0 ? (
                 <div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-xs font-bold text-gray-700">المكان:</span>
+                  </div>
                   <nav
-                    className="-mb-px flex space-x-2 overflow-x-auto"
+                    className="-mb-px flex space-x-2 overflow-x-auto pb-1"
                     aria-label="Location Tabs"
                   >
-                    {location_order.map((location) => (
-                      <button
-                        key={location}
-                        onClick={() => set_active_location_tab(location)}
-                        draggable={active_task_tab === "pending"}
-                        onDragStart={(e) =>
-                          handle_drag_start(e, "group", location)
-                        }
-                        onDragEnd={handle_drag_end}
-                        onDragOver={(e) => {
-                          if (dragged_task_id.current) {
-                            e.preventDefault();
-                            set_drag_over_location(location);
-                          } else if (dragged_group_location) {
-                            e.preventDefault();
+                    {location_order.map((location) => {
+                      const locationTasks = grouped_tasks[location] || [];
+                      const count = locationTasks.length;
+                      const hasUrgentTask =
+                        locationTasks.some((t) => t.importance === "urgent") ||
+                        admin_tasks.some(
+                          (t) =>
+                            (t.location || "غير محدد") === location &&
+                            !t.completed &&
+                            t.importance === "urgent",
+                        );
+                      const isSelected = active_location_tab === location;
+                      return (
+                        <button
+                          key={location}
+                          onClick={() => set_active_location_tab(location)}
+                          draggable={active_task_tab === "pending"}
+                          onDragStart={(e) =>
+                            handle_drag_start(e, "group", location)
                           }
-                        }}
-                        onDragLeave={() => set_drag_over_location(null)}
-                        onDrop={(e) => {
-                          set_drag_over_location(null);
-                          if (dragged_task_id.current) {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            handle_task_drop(null, location, "after");
-                          } else {
-                            // Existing group drop logic
-                            if (active_task_tab !== "pending") return;
-                            e.preventDefault();
-                            e.stopPropagation();
-                            if (
-                              !dragged_group_location ||
-                              dragged_group_location === location
-                            )
-                              return;
-                            const newOrder = [...location_order];
-                            const sourceIndex = newOrder.indexOf(
-                              dragged_group_location,
-                            );
-                            const targetIndex = newOrder.indexOf(location);
-                            if (sourceIndex === -1 || targetIndex === -1)
-                              return;
-                            const [movedItem] = newOrder.splice(sourceIndex, 1);
-                            newOrder.splice(targetIndex, 0, movedItem);
-                            set_location_order(newOrder);
-                            set_saved_location_order(newOrder);
-                          }
-                        }}
-                        className={`whitespace-nowrap py-3 px-4 border font-medium text-sm rounded-t-lg transition-colors duration-150 focus:outline-none ${active_task_tab === "pending" ? "cursor-grab" : ""} ${
-                          active_location_tab === location
-                            ? "bg-gray-50 border-gray-200 border-b-gray-50 text-blue-600 font-semibold"
-                            : "bg-white border-transparent border-b-gray-200 text-gray-500 hover:text-gray-700"
-                        } ${
-                          dragged_group_location === location
-                            ? "opacity-30"
-                            : ""
-                        } ${drag_over_location === location ? "bg-blue-200" : ""}`}
-                      >
-                        {location}
-                      </button>
-                    ))}
+                          onDragEnd={handle_drag_end}
+                          onDragOver={(e) => {
+                            if (dragged_task_id.current) {
+                              e.preventDefault();
+                              set_drag_over_location(location);
+                            } else if (dragged_group_location) {
+                              e.preventDefault();
+                            }
+                          }}
+                          onDragLeave={() => set_drag_over_location(null)}
+                          onDrop={(e) => {
+                            set_drag_over_location(null);
+                            if (dragged_task_id.current) {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              handle_task_drop(null, location, "after");
+                            } else {
+                              // Existing group drop logic
+                              if (active_task_tab !== "pending") return;
+                              e.preventDefault();
+                              e.stopPropagation();
+                              if (
+                                !dragged_group_location ||
+                                dragged_group_location === location
+                              )
+                                return;
+                              const newOrder = [...location_order];
+                              const sourceIndex = newOrder.indexOf(
+                                dragged_group_location,
+                              );
+                              const targetIndex = newOrder.indexOf(location);
+                              if (sourceIndex === -1 || targetIndex === -1)
+                                return;
+                              const [movedItem] = newOrder.splice(sourceIndex, 1);
+                              newOrder.splice(targetIndex, 0, movedItem);
+                              set_location_order(newOrder);
+                              set_saved_location_order(newOrder);
+                            }
+                          }}
+                          className={`whitespace-nowrap py-2.5 px-3.5 border font-medium text-sm rounded-t-lg transition-colors duration-150 focus:outline-none flex items-center gap-2 ${
+                            active_task_tab === "pending" ? "cursor-grab" : ""
+                          } ${
+                            hasUrgentTask
+                              ? isSelected
+                                ? "bg-red-100 border-red-400 border-b-red-100 text-red-900 font-bold shadow-xs"
+                                : "bg-red-50 border-red-300 border-b-gray-200 text-red-800 hover:bg-red-100 font-medium"
+                              : isSelected
+                                ? "bg-gray-50 border-gray-200 border-b-gray-50 text-blue-600 font-semibold"
+                                : "bg-white border-transparent border-b-gray-200 text-gray-500 hover:text-gray-700"
+                          } ${
+                            dragged_group_location === location
+                              ? "opacity-30"
+                              : ""
+                          } ${drag_over_location === location ? "bg-blue-200" : ""}`}
+                        >
+                          <span className="flex items-center gap-1.5">
+                            {location}
+                            {hasUrgentTask && (
+                              <span
+                                className="w-2 h-2 rounded-full bg-red-600 animate-pulse flex-shrink-0"
+                                title="يوجد مهمة عاجلة في هذا المكان"
+                              />
+                            )}
+                          </span>
+                        </button>
+                      );
+                    })}
                   </nav>
                   <div
                     onDragOver={handle_group_drag_over}
@@ -1942,11 +2007,14 @@ const HomePage: React.FC<HomePageProps> = ({
                     className="mt-1 w-full p-2 border rounded"
                     required
                   >
-                    <option value="5">5 دقائق</option>
-                    <option value="10">10 دقائق</option>
-                    <option value="15">15 دقيقة</option>
-                    <option value="30">30 دقيقة</option>
-                    <option value="60">ساعة واحدة</option>
+                    <option value="0">في وقت الموعد تماماً</option>
+                    <option value="5">قبل 5 دقائق</option>
+                    <option value="10">قبل 10 دقائق</option>
+                    <option value="15">قبل 15 دقيقة</option>
+                    <option value="30">قبل 30 دقيقة</option>
+                    <option value="60">قبل ساعة واحدة</option>
+                    <option value="120">قبل ساعتين</option>
+                    <option value="1440">قبل يوم واحد (24 ساعة)</option>
                   </select>
                 </div>
               </div>

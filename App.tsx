@@ -407,7 +407,7 @@ const App: React.FC<{ onRefresh: () => void }> = ({ onRefresh }) => {
                                       .map(
                                         (loc) => `
                                         <div class="location-group">
-                                            <div class="location-title">${loc}</div>
+                                            <div class="location-title" style="${grouped_pending[loc].some((t) => t.importance === "urgent") ? "background-color: #fee2e2; color: #991b1b; border-right: 4px solid #ef4444;" : ""}">${loc}${grouped_pending[loc].some((t) => t.importance === "urgent") ? ' <span style="font-size:0.8em; font-weight:normal; color:#b91c1c;">(⚠️ عاجل)</span>' : ""}</div>
                                             ${grouped_pending[loc]
                                               .map(
                                                 (t) => `
