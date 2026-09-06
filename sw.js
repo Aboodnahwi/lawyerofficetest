@@ -1,5 +1,5 @@
 // sw.js - Unified Service Worker for Offline-First Lawyer Management App
-const CACHE_NAME = "lawyer-app-cache-v2026-08-08-offline-v2";
+const CACHE_NAME = "lawyer-app-cache-v2026-08-22-offline-v3";
 
 // App Shell URLs to precache during Service Worker installation
 const urlsToCache = [
@@ -189,4 +189,42 @@ self.addEventListener("fetch", (event) => {
         });
     })
   );
+});
+
+// Background Sync: Triggered automatically by browser when connectivity is restored
+self.addEventListener("sync", (event) => {
+  console.log("Service Worker: Sync event triggered with tag:", event.tag);
+  if (event.tag === "sync-lawyer-data" || event.tag === "sync-data") {
+    event.waitUntil(
+      self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
+        clients.forEach((client) => {
+          client.postMessage({
+            type: "TRIGGER_BACKGROUND_SYNC",
+            tag: event.tag,
+            reason: "service_worker_sync",
+            timestamp: Date.now(),
+          });
+        });
+      })
+    );
+  }
+});
+
+// Periodic Background Sync: Triggered periodically by browser when online
+self.addEventListener("periodicsync", (event) => {
+  console.log("Service Worker: Periodic Sync event triggered with tag:", event.tag);
+  if (event.tag === "periodic-sync-lawyer-data") {
+    event.waitUntil(
+      self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
+        clients.forEach((client) => {
+          client.postMessage({
+            type: "TRIGGER_BACKGROUND_SYNC",
+            tag: event.tag,
+            reason: "service_worker_periodic_sync",
+            timestamp: Date.now(),
+          });
+        });
+      })
+    );
+  }
 });

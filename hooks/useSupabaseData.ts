@@ -1,4 +1,5 @@
 import * as React from "react";
+import { logActivity } from "../utils/auditLogger";
 import {
   Client,
   Session,
@@ -17,6 +18,7 @@ import {
   SiteFinancialEntry,
   Permissions,
   default_permissions,
+  AuditLogEntry,
 } from "../types";
 import { useOnlineStatus } from "./useOnlineStatus";
 import type { User } from "@supabase/supabase-js";
@@ -60,6 +62,7 @@ const get_initial_data = (): AppData => ({
   documents: [],
   profiles: [],
   site_finances: [],
+  audit_logs: [],
 });
 
 const migrate_data = (old_data: any): AppData => {
@@ -122,6 +125,7 @@ const migrate_data = (old_data: any): AppData => {
         importance: t.importance || "normal",
         assignee: t.assignee,
         image_url: img,
+        audio_url: t.audio_url || t.audioUrl,
         updated_at: t.updated_at || t.updatedAt,
       };
     }),
@@ -161,6 +165,7 @@ const migrate_data = (old_data: any): AppData => {
       assignee: t.assignee,
       location: t.location,
       image_url: img,
+      audio_url: t.audio_url || t.audioUrl,
       case_id: t.case_id || t.caseId,
       updated_at: t.updated_at || t.updatedAt,
       order_index: t.order_index ?? t.orderIndex,
@@ -241,6 +246,7 @@ const migrate_data = (old_data: any): AppData => {
     is_approved: Boolean(p.is_approved ?? p.isApproved),
     is_active: Boolean(p.is_active ?? p.isActive),
     mobile_verified: Boolean(p.mobile_verified ?? p.mobileVerified),
+    trial_used: Boolean(p.trial_used ?? p.trialUsed),
     subscription_start_date:
       p.subscription_start_date || p.subscriptionStartDate,
     subscription_end_date: p.subscription_end_date || p.subscriptionEndDate,
@@ -290,6 +296,7 @@ const migrate_data = (old_data: any): AppData => {
     documents: (old_data.documents || []).map(migrate_document),
     profiles: (old_data.profiles || []).map(migrate_profile),
     site_finances: (old_data.site_finances || []).map(migrate_site_finance),
+    audit_logs: old_data.audit_logs || [],
   };
 };
 
@@ -342,13 +349,23 @@ export const useSupabaseData = (
     }
   }, [is_data_loading]);
 
-  const [admin_viewing_user_id, set_admin_viewing_user_id] = React.useState<
+  const [admin_viewing_user_id, set_admin_viewing_user_id_internal] = React.useState<
     string | null
   >(null);
 
+  const set_admin_viewing_user_id = React.useCallback(
+    (id: string | null) => {
+      if (id === null && admin_viewing_user_id !== null) {
+        set_is_data_loading(true); // Prevent race condition when leaving user view
+      }
+      set_admin_viewing_user_id_internal(id);
+    },
+    [admin_viewing_user_id],
+  );
+
   // Reset admin viewing mode when user changes (e.g. logout)
   React.useEffect(() => {
-    set_admin_viewing_user_id(null);
+    set_admin_viewing_user_id_internal(null);
   }, [user?.id]);
 
   // Check for updates by fetching version.json from server
@@ -478,28 +495,29 @@ export const useSupabaseData = (
         (f) => f.user_id === target_user_id,
       ),
       assistants: data.assistants.filter((a: any) => {
-        // If they are strings, assume they are the default system dropdown items
+        // If it's a string, only keep default system dropdown item
         if (typeof a === "string") {
-          return true; // default_assistants
+          return a === "بدون تخصيص";
         }
         // If assistants are objects with user_id, explicitly filter them.
         if (typeof a === "object" && a !== null && "user_id" in a) {
           if (is_admin && !admin_viewing_user_id) {
-            // If admin is NOT viewing a specific user, they should only see their own assistants or system ones
-            // Otherwise the dropdown becomes a massive mess of all assistants across the app
-            return a.user_id === user?.id; 
+            return a.user_id === user?.id;
           }
           return a.user_id === target_user_id;
         }
-        // If it's some other weird object without user_id, keep it just in case
-        return true;
+        return false;
       }),
     };
   }, [data, is_admin, admin_viewing_user_id, user?.id]);
 
+  const current_user_profile: Profile | null = React.useMemo(() => {
+    if (!user) return null;
+    return data.profiles.find((p) => p.id === user.id) || null;
+  }, [user, data.profiles]);
+
   const current_user_permissions: Permissions = React.useMemo(() => {
     if (!user) return default_permissions;
-    const current_user_profile = data.profiles.find((p) => p.id === user.id);
     if (current_user_profile?.lawyer_id) {
       const perms = current_user_profile.permissions;
       if (perms && typeof perms === "object") {
@@ -620,6 +638,54 @@ export const useSupabaseData = (
     load_local_data();
   }, [user?.id, is_online, is_auth_loading, admin_viewing_user_id]);
 
+  const [is_auto_sync_enabled, set_auto_sync_enabled_state] = React.useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem("is_auto_sync_enabled");
+      if (saved !== null) return JSON.parse(saved);
+    } catch (e) {}
+    return true;
+  });
+
+  const [is_auto_backup_enabled, set_auto_backup_enabled_state] = React.useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem("is_auto_backup_enabled");
+      if (saved !== null) return JSON.parse(saved);
+    } catch (e) {}
+    return false;
+  });
+
+  const [admin_tasks_layout, set_admin_tasks_layout_state] = React.useState<
+    "horizontal" | "vertical"
+  >(() => {
+    try {
+      const saved = localStorage.getItem("admin_tasks_layout");
+      if (saved === "horizontal" || saved === "vertical") return saved;
+    } catch (e) {}
+    return "vertical";
+  });
+
+  // Load user specific settings when user changes
+  React.useEffect(() => {
+    if (!user?.id) return;
+    try {
+      const syncKey = `is_auto_sync_enabled_${user.id}`;
+      const syncSaved = localStorage.getItem(syncKey);
+      if (syncSaved !== null) set_auto_sync_enabled_state(JSON.parse(syncSaved));
+
+      const backupKey = `is_auto_backup_enabled_${user.id}`;
+      const backupSaved = localStorage.getItem(backupKey);
+      if (backupSaved !== null) set_auto_backup_enabled_state(JSON.parse(backupSaved));
+
+      const layoutKey = `admin_tasks_layout_${user.id}`;
+      const layoutSaved = localStorage.getItem(layoutKey);
+      if (layoutSaved === "horizontal" || layoutSaved === "vertical") {
+        set_admin_tasks_layout_state(layoutSaved as "horizontal" | "vertical");
+      }
+    } catch (e) {
+      console.error("Error loading user settings from localStorage:", e);
+    }
+  }, [user?.id]);
+
   const { manual_sync: manual_sync, fetch_and_refresh: fetch_and_refresh } =
     use_sync({
       user: user,
@@ -694,34 +760,7 @@ export const useSupabaseData = (
       is_dirty: is_dirty,
     });
 
-  // Auto-sync on mount/login
-  React.useEffect(() => {
-    if (user && is_online && !is_auth_loading) {
-      // If we are already synced, we might have set it forcefully to bypass the loader.
-      // So let's run a quiet background manual_sync once to pull any updates.
-      console.log("Triggering background auto-sync in 500ms...");
-      const timer = setTimeout(() => {
-        manual_sync();
-      }, 500);
-      return () => clearTimeout(timer);
-    }
-  }, [user?.id, is_online, is_auth_loading]); // removed sync_status from deps so it fires once on mount
 
-  // Auto-sync when coming back online
-  const prev_is_online = React.useRef(is_online);
-  React.useEffect(() => {
-    if (
-      user &&
-      is_online &&
-      !prev_is_online.current &&
-      !is_auth_loading &&
-      sync_status !== "syncing"
-    ) {
-      console.log("Came back online, triggering auto-sync...");
-      manual_sync();
-    }
-    prev_is_online.current = is_online;
-  }, [is_online, manual_sync, user, is_auth_loading, sync_status]); // Trigger when is_online changes from false to true
 
   // Realtime Subscription for all data tables (Immediate sync across users)
   React.useEffect(() => {
@@ -810,54 +849,6 @@ export const useSupabaseData = (
     effective_user_id,
     fetch_and_refresh,
   ]);
-
-  const [is_auto_sync_enabled, set_auto_sync_enabled_state] = React.useState<boolean>(() => {
-    try {
-      const saved = localStorage.getItem("is_auto_sync_enabled");
-      if (saved !== null) return JSON.parse(saved);
-    } catch (e) {}
-    return true;
-  });
-
-  const [is_auto_backup_enabled, set_auto_backup_enabled_state] = React.useState<boolean>(() => {
-    try {
-      const saved = localStorage.getItem("is_auto_backup_enabled");
-      if (saved !== null) return JSON.parse(saved);
-    } catch (e) {}
-    return false;
-  });
-
-  const [admin_tasks_layout, set_admin_tasks_layout_state] = React.useState<
-    "horizontal" | "vertical"
-  >(() => {
-    try {
-      const saved = localStorage.getItem("admin_tasks_layout");
-      if (saved === "horizontal" || saved === "vertical") return saved;
-    } catch (e) {}
-    return "vertical";
-  });
-
-  // Load user specific settings when user changes
-  React.useEffect(() => {
-    if (!user?.id) return;
-    try {
-      const syncKey = `is_auto_sync_enabled_${user.id}`;
-      const syncSaved = localStorage.getItem(syncKey);
-      if (syncSaved !== null) set_auto_sync_enabled_state(JSON.parse(syncSaved));
-
-      const backupKey = `is_auto_backup_enabled_${user.id}`;
-      const backupSaved = localStorage.getItem(backupKey);
-      if (backupSaved !== null) set_auto_backup_enabled_state(JSON.parse(backupSaved));
-
-      const layoutKey = `admin_tasks_layout_${user.id}`;
-      const layoutSaved = localStorage.getItem(layoutKey);
-      if (layoutSaved === "horizontal" || layoutSaved === "vertical") {
-        set_admin_tasks_layout_state(layoutSaved as "horizontal" | "vertical");
-      }
-    } catch (e) {
-      console.error("Error loading user settings from localStorage:", e);
-    }
-  }, [user?.id]);
 
   const set_auto_sync_enabled = React.useCallback(
     (enabled: boolean) => {
@@ -999,9 +990,9 @@ export const useSupabaseData = (
       sync_status !== "syncing"
     ) {
       const timer = setTimeout(() => {
-        console.log("Auto-syncing local changes to cloud...");
+        console.log("Auto-syncing local changes to cloud in background...");
         manual_sync();
-      }, 2000); // Wait 2 seconds of inactivity before auto-syncing local changes
+      }, 300); // Fast background sync upon any modification (300ms debounce)
       return () => clearTimeout(timer);
     }
   }, [
@@ -1499,6 +1490,7 @@ export const useSupabaseData = (
     set_admin_tasks_layout: set_admin_tasks_layout,
     location_order: location_order,
     set_location_order: set_location_order,
+    current_user_profile: current_user_profile,
     set_full_data: set_full_data,
     fetch_and_refresh: fetch_and_refresh,
     triggered_alerts: triggered_alerts,
@@ -1521,6 +1513,11 @@ export const useSupabaseData = (
         const updated_clients = next_clients.map((c: any) => {
           const prev_c = prev.clients.find((pc) => pc.id === c.id);
           if (!prev_c || JSON.stringify(prev_c) !== JSON.stringify(c)) {
+            if (user?.id) {
+              const action = !prev_c ? "CREATE" : "UPDATE";
+              const details = !prev_c ? `إضافة موكل: ${c.name}` : `تعديل بيانات موكل: ${c.name}`;
+              logActivity(user.id, action, "client", c.id, details);
+            }
             return { ...c, updated_at: now };
           }
           return c;
@@ -1536,6 +1533,11 @@ export const useSupabaseData = (
         const updated_tasks = next_tasks.map((t: any) => {
           const prev_t = prev.admin_tasks.find((pt) => pt.id === t.id);
           if (!prev_t || JSON.stringify(prev_t) !== JSON.stringify(t)) {
+            if (user?.id) {
+              const action = !prev_t ? "CREATE" : "UPDATE";
+              const details = !prev_t ? `إضافة مهمة: ${t.task}` : `تعديل مهمة: ${t.task}`;
+              logActivity(user.id, action, "admin_task", t.id, details);
+            }
             return { ...t, updated_at: now };
           }
           return t;
@@ -1553,6 +1555,11 @@ export const useSupabaseData = (
         const updated_apps = next_apps.map((a: any) => {
           const prev_a = prev.appointments.find((pa) => pa.id === a.id);
           if (!prev_a || JSON.stringify(prev_a) !== JSON.stringify(a)) {
+            if (user?.id) {
+              const action = !prev_a ? "CREATE" : "UPDATE";
+              const details = !prev_a ? `إضافة موعد: ${a.title}` : `تعديل موعد: ${a.title}`;
+              logActivity(user.id, action, "appointment", a.id, details);
+            }
             return { ...a, updated_at: now };
           }
           return a;
@@ -1646,6 +1653,10 @@ export const useSupabaseData = (
       }
     },
     delete_client: (id: string) => {
+      const client = data.clients.find((c) => c.id === id);
+      if (client && user?.id) {
+        logActivity(user.id, "DELETE", "client", id, `حذف موكل: ${client.name}`);
+      }
       set_deleted_ids((prev) => ({ ...prev, clients: [...prev.clients, id] }));
       set_full_data((prev) => ({
         ...prev,
@@ -1653,6 +1664,11 @@ export const useSupabaseData = (
       }));
     },
     delete_case: (client_id: string, case_id: string) => {
+      const client = data.clients.find((c) => c.id === client_id);
+      const caseItem = client?.cases.find((cs) => cs.id === case_id);
+      if (caseItem && user?.id) {
+        logActivity(user.id, "DELETE", "case", case_id, `حذف قضية: ${caseItem.subject || case_id}`);
+      }
       set_deleted_ids((prev) => ({ ...prev, cases: [...prev.cases, case_id] }));
       set_full_data((prev) => ({
         ...prev,
@@ -1729,6 +1745,10 @@ export const useSupabaseData = (
       }));
     },
     delete_admin_task: (id: string) => {
+      const task = data.admin_tasks.find((t) => t.id === id);
+      if (task && user?.id) {
+        logActivity(user.id, "DELETE", "admin_task", id, `حذف مهمة: ${task.task}`);
+      }
       set_deleted_ids((prev) => ({
         ...prev,
         admin_tasks: [...prev.admin_tasks, id],
@@ -1739,6 +1759,10 @@ export const useSupabaseData = (
       }));
     },
     delete_appointment: (id: string) => {
+      const appt = data.appointments.find((a) => a.id === id);
+      if (appt && user?.id) {
+        logActivity(user.id, "DELETE", "appointment", id, `حذف موعد: ${appt.title}`);
+      }
       set_deleted_ids((prev) => ({
         ...prev,
         appointments: [...prev.appointments, id],
@@ -1749,6 +1773,16 @@ export const useSupabaseData = (
       }));
     },
     delete_accounting_entry: (id: string) => {
+      const entry = data.accounting_entries.find((e) => e.id === id);
+      if (entry && user?.id) {
+        logActivity(
+          user.id,
+          "DELETE",
+          "accounting_entry",
+          id,
+          `حذف قيد محاسبي: ${entry.description} (${entry.amount.toLocaleString()} ل.س)`,
+        );
+      }
       set_deleted_ids((prev) => ({
         ...prev,
         accounting_entries: [...prev.accounting_entries, id],
@@ -1759,6 +1793,10 @@ export const useSupabaseData = (
       }));
     },
     delete_invoice: (id: string) => {
+      const inv = data.invoices.find((i) => i.id === id);
+      if (inv && user?.id) {
+        logActivity(user.id, "DELETE", "invoice", id, `حذف فاتورة: ${inv.client_name} (${inv.id})`);
+      }
       set_deleted_ids((prev) => ({
         ...prev,
         invoices: [...prev.invoices, id],
@@ -1799,5 +1837,11 @@ export const useSupabaseData = (
     download_document_file,
     get_document_file,
     postpone_session,
+    audit_logs: data.audit_logs || [],
+    log_activity: async (action: string, entity_type: string, entity_id?: string, details?: string) => {
+      if (user?.id) {
+        logActivity(user.id, action, entity_type, entity_id, details);
+      }
+    },
   };
 };

@@ -11,6 +11,7 @@ import {
 } from "../utils/dateUtils";
 import { Session, Appointment } from "../types";
 import { ChevronLeftIcon } from "./icons";
+import { useFeedback } from "../context/FeedbackContext";
 
 interface CalendarProps {
   onDateSelect: (date: Date) => void;
@@ -29,6 +30,7 @@ const Calendar: React.FC<CalendarProps> = ({
   currentDate,
   setCurrentDate,
 }) => {
+  const { showFeedback } = useFeedback();
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();
 
@@ -86,9 +88,11 @@ const Calendar: React.FC<CalendarProps> = ({
       }
     });
 
-    const appointmentCount = appointments.filter((a) =>
+    const dayAppointments = appointments.filter((a) =>
       is_same_day(a.date, day)
-    ).length;
+    );
+    const appointmentCount = dayAppointments.length;
+    const completedAppointmentCount = dayAppointments.filter((a) => a.completed).length;
 
     return {
       postponedCount,
@@ -96,6 +100,7 @@ const Calendar: React.FC<CalendarProps> = ({
       todayCount,
       futureCount,
       appointmentCount,
+      completedAppointmentCount,
     };
   };
 
@@ -136,6 +141,7 @@ const Calendar: React.FC<CalendarProps> = ({
             todayCount,
             futureCount,
             appointmentCount,
+            completedAppointmentCount,
           } = getEventsCountForDay(day);
           const isSelected = is_same_day(day, selectedDate);
           const isCurrentDay = is_today(day);
@@ -164,7 +170,12 @@ const Calendar: React.FC<CalendarProps> = ({
           return (
             <div
               key={day.toString()}
-              onClick={() => onDateSelect(day)}
+              onClick={() => {
+                onDateSelect(day);
+                if (holidayName) {
+                  showFeedback(`عطلة رسمية: ${holidayName}`, "info");
+                }
+              }}
               className={dayClasses}
               title={title}
             >
@@ -204,10 +215,28 @@ const Calendar: React.FC<CalendarProps> = ({
                 )}
                 {appointmentCount > 0 && (
                   <span
-                    className="flex items-center justify-center min-w-[1.25rem] h-5 px-1 text-[10px] font-bold text-white bg-purple-500 rounded-full shadow-sm"
-                    title={`${numberFormatter.format(appointmentCount)} مواعيد`}
+                    className={`flex items-center justify-center min-w-[1.25rem] h-5 px-1 gap-0.5 text-[10px] font-bold text-white ${
+                      completedAppointmentCount === appointmentCount ? 'bg-purple-600' : 'bg-purple-500'
+                    } rounded-full shadow-sm`}
+                    title={`${numberFormatter.format(appointmentCount)} مواعيد${
+                      completedAppointmentCount > 0 ? ` (${numberFormatter.format(completedAppointmentCount)} منجزة)` : ""
+                    }`}
                   >
-                    {numberFormatter.format(appointmentCount)}
+                    <span>{numberFormatter.format(appointmentCount)}</span>
+                    {completedAppointmentCount > 0 && (
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        viewBox="0 0 24 24"
+                        fill="currentColor"
+                        className="w-2.5 h-2.5 text-white"
+                      >
+                        <path
+                          fillRule="evenodd"
+                          d="M19.916 4.626a.75.75 0 01.208 1.04l-9 13.5a.75.75 0 01-1.154.114l-6-6a.75.75 0 011.06-1.06l5.353 5.353 8.493-12.739a.75.75 0 011.04-.208z"
+                          clipRule="evenodd"
+                        />
+                      </svg>
+                    )}
                   </span>
                 )}
               </div>

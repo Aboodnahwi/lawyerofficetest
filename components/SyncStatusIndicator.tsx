@@ -34,6 +34,21 @@ const SyncStatusIndicator: React.FC<SyncStatusIndicatorProps> = ({
   on_clear_log = () => {},
 }) => {
   const [isLogOpen, setIsLogOpen] = React.useState(false);
+  const [isManualSyncing, setIsManualSyncing] = React.useState(false);
+
+  React.useEffect(() => {
+    if (status !== "syncing") {
+      const timer = setTimeout(() => {
+        setIsManualSyncing(false);
+      }, 500);
+      return () => clearTimeout(timer);
+    }
+  }, [status]);
+
+  const handleManualSyncClick = () => {
+    setIsManualSyncing(true);
+    on_manual_sync();
+  };
 
   let displayStatus;
   if (!is_online) {
@@ -64,12 +79,12 @@ const SyncStatusIndicator: React.FC<SyncStatusIndicatorProps> = ({
       className: "text-gray-500",
       title: "جاري تحميل البيانات...",
     };
-  } else if (status === "syncing") {
+  } else if (status === "syncing" || isManualSyncing) {
     displayStatus = {
-      icon: <ArrowPathIcon className="w-5 h-5 text-blue-500 animate-pulse" />,
+      icon: <ArrowPathIcon className="w-5 h-5 text-blue-500 animate-spin" />,
       text: "جاري المزامنة...",
-      className: "text-blue-500",
-      title: "جاري مزامنة بياناتك مع السحابة.",
+      className: "text-blue-500 font-medium",
+      title: "جاري مزامنة بياناتك مع السحابة...",
     };
   } else if (status === "error") {
     displayStatus = {
@@ -78,7 +93,7 @@ const SyncStatusIndicator: React.FC<SyncStatusIndicatorProps> = ({
       className: "text-red-500",
       title: `فشل المزامنة: ${last_error}`,
     };
-  } else if (is_dirty) {
+  } else if (is_dirty && !is_auto_sync_enabled) {
     displayStatus = {
       icon: <ArrowPathIcon className="w-5 h-5 text-yellow-600" />,
       text: "تغييرات غير محفوظة",
@@ -94,17 +109,12 @@ const SyncStatusIndicator: React.FC<SyncStatusIndicatorProps> = ({
     };
   }
 
-  const canSyncManually =
-    is_online &&
-    status !== "syncing" &&
-    status !== "loading" &&
-    status !== "unconfigured" &&
-    status !== "uninitialized";
+  const canSyncManually = is_online;
 
   return (
     <div className="flex items-center gap-1">
       <button
-        onClick={canSyncManually ? on_manual_sync : undefined}
+        onClick={canSyncManually ? handleManualSyncClick : undefined}
         disabled={!canSyncManually}
         className={`flex items-center gap-2 text-sm font-semibold p-2 rounded-lg ${canSyncManually ? "cursor-pointer hover:bg-gray-100" : "cursor-default"} ${className}`}
         title={displayStatus.title}

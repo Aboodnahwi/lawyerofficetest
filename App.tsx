@@ -5,12 +5,14 @@ import ClientsPage from "./pages/ClientsPage";
 import HomePage from "./pages/HomePage";
 import AccountingPage from "./pages/AccountingPage";
 import SettingsPage from "./pages/SettingsPage";
+import ActivityLogsPage from "./pages/ActivityLogsPage";
 import LoginPage from "./pages/LoginPage";
 import AdminDashboard from "./pages/AdminDashboard";
 import PendingApprovalPage from "./pages/PendingApprovalPage";
 import SubscriptionExpiredPage from "./pages/SubscriptionExpiredPage";
 
 import ConfigurationModal from "./components/ConfigurationModal";
+import Logo from "./components/Logo";
 import { useSupabaseData, SyncStatus } from "./hooks/useSupabaseData";
 import {
   UserIcon,
@@ -38,13 +40,14 @@ import {
   format_time,
   is_same_day,
   is_before_today,
+  to_input_date_string,
 } from "./utils/dateUtils";
 import { printElement } from "./utils/printUtils";
 import SyncStatusIndicator from "./components/SyncStatusIndicator";
 import NotificationCenter from "./components/RealtimeNotifier";
 import { AdminTask } from "./types";
 
-type Page = "home" | "admin-tasks" | "clients" | "accounting" | "settings";
+type Page = "home" | "admin-tasks" | "clients" | "accounting" | "settings" | "logs";
 
 interface NavbarProps {
   currentPage: Page;
@@ -94,7 +97,7 @@ const Navbar: React.FC<NavbarProps> = ({
     },
     {
       id: "clients",
-      label: "الموكلين",
+      label: "الموكلين والقضايا",
       icon: UserIcon,
       visible: permissions.can_view_clients,
     },
@@ -108,10 +111,13 @@ const Navbar: React.FC<NavbarProps> = ({
 
   return (
     <header className="bg-white shadow-md p-2 sm:p-4 flex justify-between items-center no-print sticky top-0 z-30">
-      <div className="flex items-center gap-4">
-        <h1 className="text-lg font-bold text-gray-800 hidden sm:block">
-          مكتب المحامي
-        </h1>
+      <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 cursor-pointer" onClick={() => onNavigate("home")}>
+          <Logo size="sm" className="h-9 w-9" />
+          <h1 className="text-lg font-bold text-gray-800">
+            مكتب المحامي
+          </h1>
+        </div>
         <div className="flex items-center gap-2 px-3 py-1 bg-blue-50 rounded-full border border-blue-100">
           <UserIcon className="w-4 h-4 text-blue-600" />
           <span className="text-xs font-bold text-blue-800 truncate max-w-[120px]">
@@ -191,7 +197,7 @@ const BottomNav: React.FC<BottomNavProps> = ({
     },
     {
       id: "clients",
-      label: "الموكلين",
+      label: "الموكلين والقضايا",
       icon: UserIcon,
       visible: permissions.can_view_clients,
     },
@@ -457,6 +463,18 @@ const App: React.FC<{ onRefresh: () => void }> = ({ onRefresh }) => {
         user.email === "nahwiabdo@gmail.com" ||
         user.email === "avocat.nahwi@gmail.com" ||
         user.email === "sy963958932922@email.com";
+      const now = new Date();
+      const fortyFiveDaysLater = new Date(
+        now.getFullYear(),
+        now.getMonth(),
+        now.getDate() + 45
+      );
+      const oneYearLater = new Date(
+        now.getFullYear() + 1,
+        now.getMonth(),
+        now.getDate()
+      );
+
       const newProfile = {
         id: user.id,
         full_name: user.user_metadata?.full_name || "مستخدم جديد",
@@ -465,12 +483,11 @@ const App: React.FC<{ onRefresh: () => void }> = ({ onRefresh }) => {
         is_approved: is_admin,
         is_active: true,
         mobile_verified: is_admin,
-        subscription_start_date: new Date().toISOString(),
-        subscription_end_date: new Date(
-          new Date().getFullYear() + 1,
-          new Date().getMonth(),
-          new Date().getDate(),
-        ).toISOString(),
+        trial_used: !is_admin,
+        subscription_start_date: to_input_date_string(now),
+        subscription_end_date: is_admin
+          ? to_input_date_string(oneYearLater)
+          : to_input_date_string(fortyFiveDaysLater),
       };
 
       const { error } = await supabase.from("profiles").upsert([newProfile]);
@@ -504,8 +521,26 @@ const App: React.FC<{ onRefresh: () => void }> = ({ onRefresh }) => {
     }
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((event, newSession) => {
+    } = supabase.auth.onAuthStateChange(async (event, newSession) => {
       console.log("Auth state changed:", event, newSession?.user?.id);
+      
+      if (event === "SIGNED_IN" && newSession?.user?.id) {
+        const sessionKey = "session_login_logged_" + newSession.user.id;
+        if (!sessionStorage.getItem(sessionKey)) {
+          sessionStorage.setItem(sessionKey, "true");
+          import("./utils/auditLogger").then(({ logActivity }) => {
+            logActivity(
+              newSession.user.id,
+              "LOGIN",
+              "auth",
+              newSession.user.id,
+              "تسجيل دخول للنظام",
+              newSession.user.user_metadata?.full_name || newSession.user.email || ""
+            );
+          });
+        }
+      }
+
       if (newSession) {
         setSession(newSession);
         localStorage.setItem(
@@ -602,6 +637,7 @@ const App: React.FC<{ onRefresh: () => void }> = ({ onRefresh }) => {
     profile?.full_name || session?.user.user_metadata?.full_name || "مستخدم";
 
   const handleLogout = async () => {
+    sessionStorage.clear();
     localStorage.removeItem("lawyerAppLastUser");
     setSession(null);
     if (supabase) await supabase.auth.signOut();
@@ -859,11 +895,14 @@ const App: React.FC<{ onRefresh: () => void }> = ({ onRefresh }) => {
     <DataProvider value={data}>
       <div className="flex flex-col h-screen print:h-auto bg-gray-50 print:bg-white">
         {data.admin_viewing_user_id && (
-          <div className="bg-red-600 text-white p-2 text-center text-sm font-bold flex justify-center items-center gap-4">
-            <span>أنت الآن تتصفح مكتب مستخدم آخر كمسؤول</span>
+          <div className="bg-red-600 text-white p-2 text-center text-sm font-bold flex justify-center items-center gap-4 z-50 sticky top-0">
+            <span>
+              أنت الآن تتصفح بيانات مكتب:{" "}
+              {data.profiles.find((p) => p.id === data.admin_viewing_user_id)?.full_name || "مستخدم آخر"}
+            </span>
             <button
               onClick={() => data.set_admin_viewing_user_id(null)}
-              className="bg-white text-red-600 px-3 py-1 rounded-md text-xs hover:bg-red-50 transition-colors"
+              className="bg-white text-red-600 px-3 py-1 rounded-md text-xs hover:bg-red-50 transition-colors shadow-sm"
             >
               العودة للوحة الإدارة
             </button>
@@ -929,7 +968,8 @@ const App: React.FC<{ onRefresh: () => void }> = ({ onRefresh }) => {
           {currentPage === "accounting" && (
             <AccountingPage clear_initial_invoice_data={() => {}} />
           )}
-          {currentPage === "settings" && <SettingsPage />}
+          {currentPage === "settings" && <SettingsPage onNavigate={(page) => setCurrentPage(page as Page)} />}
+          {currentPage === "logs" && <ActivityLogsPage />}
           {currentPage === "admin-tasks" && (
             <HomePage
               on_open_admin_task_modal={(initialData) => {

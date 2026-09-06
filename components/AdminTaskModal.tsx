@@ -3,6 +3,7 @@ import DatePicker from "./DatePicker";
 import { AdminTask } from "../types";
 import { to_input_date_string, safe_revive_date } from "../utils/dateUtils";
 import { CameraIcon, PhotoIcon, TrashIcon } from "./icons";
+import AudioRecorder from "./AudioRecorder";
 
 interface AdminTaskModalProps {
   isOpen: boolean;
@@ -15,6 +16,7 @@ interface AdminTaskModalProps {
     id?: string;
     case_id?: string;
     image_url?: string;
+    audio_url?: string;
   };
   assistants: (string | { name: string; user_id?: string })[];
 }
@@ -76,6 +78,7 @@ const AdminTaskModal: React.FC<AdminTaskModalProps> = ({
     assignee: "بدون تخصيص",
     location: "",
     image_url: undefined as string | undefined,
+    audio_url: undefined as string | undefined,
     case_id: undefined as string | undefined,
   });
 
@@ -93,6 +96,7 @@ const AdminTaskModal: React.FC<AdminTaskModalProps> = ({
         assignee: "بدون تخصيص",
         location: "",
         image_url: undefined as string | undefined,
+        audio_url: undefined as string | undefined,
         case_id: undefined as string | undefined,
       };
       set_task_form_data({
@@ -103,6 +107,7 @@ const AdminTaskModal: React.FC<AdminTaskModalProps> = ({
           : defaultState.due_date,
         case_id: initialData?.case_id,
         image_url: initialData?.image_url,
+        audio_url: initialData?.audio_url,
       });
     }
   }, [isOpen, initialData]);
@@ -137,11 +142,25 @@ const AdminTaskModal: React.FC<AdminTaskModalProps> = ({
     set_task_form_data((prev) => ({ ...prev, image_url: undefined }));
   };
 
+  const handle_audio_change = (newAudioUrl: string | undefined) => {
+    set_task_form_data((prev) => ({ ...prev, audio_url: newAudioUrl }));
+  };
+
   const handle_task_submit = (e: React.FormEvent) => {
     e.preventDefault();
-    const taskText = task_form_data.task.trim() || (task_form_data.image_url ? "صورة مرفقة" : "");
-    if (!taskText && !task_form_data.image_url) {
-      alert("يرجى إدخال وصف المهمة أو إرفاق صورة.");
+    let taskText = task_form_data.task.trim();
+    if (!taskText) {
+      if (task_form_data.audio_url && task_form_data.image_url) {
+        taskText = "ملاحظة صوتية وصورة مرفقة";
+      } else if (task_form_data.audio_url) {
+        taskText = "ملاحظة صوتية مسجلة";
+      } else if (task_form_data.image_url) {
+        taskText = "صورة مرفقة";
+      }
+    }
+
+    if (!taskText && !task_form_data.image_url && !task_form_data.audio_url) {
+      alert("يرجى إدخال وصف المهمة أو تسجيل ملاحظة صوتية أو إرفاق صورة.");
       return;
     }
     if (!task_form_data.due_date) return;
@@ -156,10 +175,13 @@ const AdminTaskModal: React.FC<AdminTaskModalProps> = ({
       due_date: to_input_date_string(taskDate),
       location: task_form_data.location || "غير محدد",
       image_url: task_form_data.image_url,
+      audio_url: task_form_data.audio_url,
     } as Omit<AdminTask, "completed"> & { id?: string });
   };
 
   if (!isOpen) return null;
+
+  const hasMedia = !!(task_form_data.image_url || task_form_data.audio_url);
 
   return (
     <div
@@ -167,31 +189,45 @@ const AdminTaskModal: React.FC<AdminTaskModalProps> = ({
       onClick={onClose}
     >
       <div
-        className="bg-white p-6 rounded-lg shadow-xl w-full max-w-lg"
+        className="bg-white p-6 rounded-xl shadow-xl w-full max-w-lg my-8"
         onClick={(e) => e.stopPropagation()}
       >
-        <h2 className="text-xl font-bold mb-4">
+        <h2 className="text-xl font-bold mb-4 text-gray-800">
           {initialData?.id ? "تعديل مهمة" : "إضافة مهمة جديدة"}
         </h2>
         <form onSubmit={handle_task_submit} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700">
+            <label className="block text-sm font-medium text-gray-700 mb-1">
               المهمة / ملاحظات نصية
             </label>
             <textarea
               name="task"
               value={task_form_data.task || ""}
               onChange={handle_task_form_change}
-              className="w-full p-2 border rounded"
+              className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
               rows={3}
-              placeholder={task_form_data.image_url ? "أدخل نص أو ملاحظات مع الصورة (اختياري)..." : "أدخل تفاصيل المهمة..."}
-              required={!task_form_data.image_url}
+              placeholder={hasMedia ? "أدخل نص أو تفاصيل إضافية (اختياري)..." : "أدخل تفاصيل المهمة..."}
+              required={!hasMedia}
+            />
+          </div>
+
+          {/* Voice Note Recording Section */}
+          <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+            <label className="block text-sm font-semibold text-gray-800">
+              تسجيل ملاحظة صوتية فورية
+            </label>
+            <p className="text-xs text-gray-500">
+              يمكنك تسجيل مقطع صوتي مباشرة من جهازك وإرفاقه فوراً مع المهمة.
+            </p>
+            <AudioRecorder
+              audioUrl={task_form_data.audio_url}
+              onAudioChange={handle_audio_change}
             />
           </div>
 
           {/* Image Upload Section */}
-          <div className="border border-dashed border-gray-300 p-3 rounded-lg bg-gray-50">
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+          <div className="border border-dashed border-gray-300 p-3.5 rounded-xl bg-gray-50">
+            <label className="block text-sm font-semibold text-gray-800 mb-2">
               صورة المهمة (كاميرا الجوال أو من الجهاز)
             </label>
 
@@ -256,7 +292,7 @@ const AdminTaskModal: React.FC<AdminTaskModalProps> = ({
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700">
+            <label className="block text-sm font-medium text-gray-700 mb-1">
               المكان
             </label>
             <input
@@ -265,7 +301,7 @@ const AdminTaskModal: React.FC<AdminTaskModalProps> = ({
               list="locations"
               value={task_form_data.location || ""}
               onChange={handle_task_form_change}
-              className="w-full p-2 border rounded"
+              className="w-full p-2 border border-gray-300 rounded-lg"
               placeholder="مثال: القصر العدلي"
             />
             <datalist id="locations">
@@ -278,7 +314,7 @@ const AdminTaskModal: React.FC<AdminTaskModalProps> = ({
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700">
+              <label className="block text-sm font-medium text-gray-700 mb-1">
                 تاريخ الاستحقاق
               </label>
               <DatePicker
@@ -293,14 +329,14 @@ const AdminTaskModal: React.FC<AdminTaskModalProps> = ({
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700">
+              <label className="block text-sm font-medium text-gray-700 mb-1">
                 الأهمية
               </label>
               <select
                 name="importance"
                 value={task_form_data.importance || "normal"}
                 onChange={handle_task_form_change}
-                className="w-full p-2 border rounded"
+                className="w-full p-2 border border-gray-300 rounded-lg"
                 required
               >
                 <option value="normal">عادي</option>
@@ -310,14 +346,14 @@ const AdminTaskModal: React.FC<AdminTaskModalProps> = ({
             </div>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700">
+            <label className="block text-sm font-medium text-gray-700 mb-1">
               تخصيص لـ
             </label>
             <select
               name="assignee"
               value={task_form_data.assignee || "بدون تخصيص"}
               onChange={handle_task_form_change}
-              className="w-full p-2 border rounded"
+              className="w-full p-2 border border-gray-300 rounded-lg"
             >
               {assistants.map((assistant, index) => {
                 const name =
@@ -330,20 +366,20 @@ const AdminTaskModal: React.FC<AdminTaskModalProps> = ({
               })}
             </select>
           </div>
-          <div className="mt-6 flex justify-end gap-4">
+          <div className="mt-6 flex justify-end gap-4 pt-3 border-t">
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 bg-gray-200 rounded-lg hover:bg-gray-300"
+              className="px-4 py-2 bg-gray-100 text-gray-700 font-medium rounded-lg hover:bg-gray-200 transition-colors"
             >
               إلغاء
             </button>
             <button
               type="submit"
               disabled={isProcessingImage}
-              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+              className="px-5 py-2 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 shadow-sm"
             >
-              حفظ
+              حفظ المهمة
             </button>
           </div>
         </form>

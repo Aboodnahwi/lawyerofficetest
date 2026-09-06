@@ -10,6 +10,7 @@ import {
   Profile,
   SiteFinancialEntry,
   SyncDeletion,
+  AuditLogEntry,
 } from "../types";
 import type { User } from "@supabase/supabase-js";
 import { safe_revive_date, to_input_date_string } from "../utils/dateUtils";
@@ -28,6 +29,7 @@ export type FlatData = {
   case_documents: CaseDocument[];
   profiles: Profile[];
   site_finances: SiteFinancialEntry[];
+  audit_logs: AuditLogEntry[];
   sync_deletions: SyncDeletion[];
 };
 
@@ -168,6 +170,10 @@ export const fetch_data_from_supabase = async (
 
   const query = (table: string, all_user_ids?: string[]) => {
     let q = supabase.from(table).select("*");
+
+    if (table === "profiles" && is_admin_user) {
+      return q;
+    }
 
     if (all_user_ids && all_user_ids.length > 0) {
       // Specific user backup (including assistants if applicable)
@@ -417,25 +423,39 @@ export const fetch_data_from_supabase = async (
   throw new Error("Failed to fetch data after multiple attempts.");
 };
 
-export const fetch_deletions_from_supabase = async (): Promise<
-  SyncDeletion[]
-> => {
+export const fetch_deletions_from_supabase = async (
+  user_id?: string,
+): Promise<SyncDeletion[]> => {
   const supabase = get_supabase_client();
   if (!supabase) return [];
-  const thirty_days_ago = safe_revive_date(new Date());
-  thirty_days_ago.setDate(thirty_days_ago.getDate() - 30);
-  const thirty_days_ago_str = to_input_date_string(thirty_days_ago);
+  const thirty_days_ago = new Date(
+    Date.now() - 30 * 24 * 60 * 60 * 1000,
+  ).toISOString();
 
   const max_retries = 3;
   let attempt = 0;
 
   while (attempt < max_retries) {
     try {
-      const { data, error } = await supabase
-        .from("sync_deletions")
-        .select("*")
-        .gte("deleted_at", thirty_days_ago_str);
+      let query = supabase.from("sync_deletions").select("*");
+      if (user_id) {
+        query = query.or(`user_id.eq.${user_id},user_id.is.null`);
+      }
+      const { data, error } = await query
+        .gte("deleted_at", thirty_days_ago)
+        .order("deleted_at", { ascending: false })
+        .limit(1000);
+
       if (error) {
+        // Fallback query if gte fails on column type
+        const fallback = await supabase
+          .from("sync_deletions")
+          .select("*")
+          .order("id", { ascending: false })
+          .limit(500);
+        if (!fallback.error && fallback.data) {
+          return fallback.data;
+        }
         const message = String(error.message || "").toLowerCase();
         if (
           message.includes("abort") ||
@@ -444,16 +464,14 @@ export const fetch_deletions_from_supabase = async (): Promise<
         ) {
           if (attempt < max_retries - 1) {
             attempt++;
-            console.warn(
-              `fetch_deletions_from_supabase attempt ${attempt} failed: ${message}. Retrying...`,
-            );
             await new Promise((resolve) =>
               setTimeout(resolve, 500 * attempt + Math.random() * 500),
             );
             continue;
           }
         }
-        throw error;
+        console.warn("Fetch deletions error (non-fatal):", error.message);
+        return [];
       }
       return data || [];
     } catch (err: any) {
@@ -470,7 +488,7 @@ export const fetch_deletions_from_supabase = async (): Promise<
         );
         continue;
       }
-      console.warn("Fetch deletions failed:", err);
+      console.warn("Fetch deletions failed (non-fatal):", err);
       return [];
     }
   }
@@ -518,11 +536,14 @@ export const delete_data_from_supabase = async (
               table_name: table,
               record_id: id,
               user_id: user_id_to_use,
+              deleted_at: new Date().toISOString(),
             }));
             const { error: log_error } = await supabase
               .from("sync_deletions")
               .insert(deletions_log);
-            if (log_error) throw log_error;
+            if (log_error) {
+              console.warn(`[SyncDeletions Log] Non-fatal log warning for ${table}:`, log_error.message);
+            }
           }
           const { error } = await supabase
             .from(table)
@@ -720,6 +741,7 @@ export const upsert_data_to_supabase = async (
       is_approved: profile.is_approved,
       is_active: profile.is_active,
       mobile_verified: profile.mobile_verified,
+      trial_used: profile.trial_used,
       subscription_start_date: profile.subscription_start_date,
       subscription_end_date: profile.subscription_end_date,
       role:

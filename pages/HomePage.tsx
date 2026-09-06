@@ -36,6 +36,8 @@ import { MenuItem } from "../components/ContextMenu";
 import { useDebounce } from "../hooks/useDebounce";
 import { useData } from "../context/DataContext";
 import { useFeedback } from "../context/FeedbackContext";
+import TrialReminderBanner from "../components/TrialReminderBanner";
+import AudioPlayer from "../components/AudioPlayer";
 
 // ... (Constants importanceMap, importanceMapAdminTasks, formatTime, and AppointmentsTable remain the same)
 const importance_map: { [key: string]: { text: string; className: string } } = {
@@ -233,6 +235,7 @@ const HomePage: React.FC<HomePageProps> = ({
     permissions, // Destructure permissions
     effective_user_id, // Use effective_user_id
     share_via_whatsapp,
+    current_user_profile,
   } = useData();
   const { confirm, showFeedback } = useFeedback();
 
@@ -660,6 +663,9 @@ const HomePage: React.FC<HomePageProps> = ({
       `*الأهمية:* ${importance_map_admin_tasks[task.importance]?.text}`,
       `*المسؤول:* ${task.assignee || "غير محدد"}`,
     ];
+    if (task.audio_url) {
+      lines.push(`*ملاحظة:* يوجد ملاحظة صوتية مرفقة مع هذه المهمة في التطبيق.`);
+    }
     if (task.image_url) {
       lines.push(`*ملاحظة:* يوجد صورة مرفقة مع هذه المهمة في التطبيق.`);
     }
@@ -1267,6 +1273,11 @@ const HomePage: React.FC<HomePageProps> = ({
               />
             </div>
           )}
+          {task.audio_url && (
+            <div className="mt-2.5 max-w-md">
+              <AudioPlayer src={task.audio_url} />
+            </div>
+          )}
           <div className="mt-2 flex items-center gap-x-4 gap-y-2 text-sm text-gray-600">
             {" "}
             <div
@@ -1363,6 +1374,12 @@ const HomePage: React.FC<HomePageProps> = ({
 
   return (
     <div className="space-y-6">
+      {/* Gentle Trial Expiration Reminder Banner (10 days warning, repeats every 2 days) */}
+      <TrialReminderBanner
+        user_profile={current_user_profile}
+        on_contact_admin={(message, phone) => share_via_whatsapp(message, phone)}
+      />
+
       {main_view === "agenda" && (
         <div className="grid grid-cols-1 lg:grid-cols-3 print:block gap-6 animate-fade-in">
           <div className="lg:col-span-1 bg-white p-4 rounded-lg shadow space-y-4 no-print overflow-visible">
@@ -1558,7 +1575,7 @@ const HomePage: React.FC<HomePageProps> = ({
                 <h2 className="text-2xl font-semibold">المهام الإدارية</h2>
                 {permissions.can_add_admin_task && (
                   <button
-                    onClick={() => on_open_admin_task_modal()}
+                    onClick={() => on_open_admin_task_modal(active_location_tab ? { location: active_location_tab } : undefined)}
                     className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition-colors text-sm shadow-xs"
                   >
                     <PlusIcon className="w-5 h-5" />
@@ -1620,11 +1637,8 @@ const HomePage: React.FC<HomePageProps> = ({
             <div className="flex flex-row gap-4 pt-4">
               {location_order.length > 0 && (
                 <div className="flex flex-col gap-2 w-32 sm:w-40 flex-shrink-0 sticky top-32 self-start">
-                  <div className="flex items-center justify-between pb-2 px-1 border-b border-gray-200 mb-1">
+                  <div className="flex items-center pb-2 px-1 border-b border-gray-200 mb-1">
                     <span className="text-xs font-bold text-gray-700 uppercase tracking-wider">المكان</span>
-                    <span className="text-[11px] font-semibold text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full" title="إجمالي الأماكن">
-                      {location_order.length}
-                    </span>
                   </div>
                   <nav
                     className="flex flex-col gap-1.5"
@@ -1687,16 +1701,16 @@ const HomePage: React.FC<HomePageProps> = ({
                               set_saved_location_order(newOrder);
                             }
                           }}
-                          className={`whitespace-normal break-words w-full text-right px-2.5 py-2 border-r-4 font-medium text-sm transition-colors duration-150 focus:outline-none rounded-l-md flex items-center justify-between gap-1.5 ${
+                          className={`whitespace-normal break-words w-full text-right px-3 py-2.5 border-r-4 font-semibold text-sm transition-all duration-150 focus:outline-none rounded-l-lg flex items-center justify-between gap-2 shadow-xs ${
                             active_task_tab === "pending" ? "cursor-grab" : ""
                           } ${
                             hasUrgentTask
                               ? isSelected
-                                ? "border-red-500 bg-red-100 text-red-900 font-bold shadow-xs"
+                                ? "border-red-700 bg-red-600 text-white font-bold shadow-md shadow-red-500/20"
                                 : "border-red-400 bg-red-50 text-red-800 hover:bg-red-100 font-medium"
                               : isSelected
-                                ? "border-blue-500 bg-blue-50 text-blue-600 font-semibold"
-                                : "border-transparent text-gray-600 hover:bg-gray-100 bg-white"
+                                ? "border-blue-700 bg-blue-600 text-white font-bold shadow-md shadow-blue-500/20"
+                                : "border-gray-200 bg-gray-50 text-gray-700 hover:bg-gray-100 hover:text-gray-900"
                           } ${
                             dragged_group_location === location
                               ? "opacity-30"
@@ -1707,7 +1721,9 @@ const HomePage: React.FC<HomePageProps> = ({
                             {location}
                             {hasUrgentTask && (
                               <span
-                                className="w-2 h-2 rounded-full bg-red-600 animate-pulse flex-shrink-0"
+                                className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                                  isSelected ? "bg-white" : "bg-red-600 animate-pulse"
+                                }`}
                                 title="يوجد مهمة عاجلة في هذا المكان"
                               />
                             )}
@@ -1818,16 +1834,16 @@ const HomePage: React.FC<HomePageProps> = ({
                               set_saved_location_order(newOrder);
                             }
                           }}
-                          className={`whitespace-nowrap py-2.5 px-3.5 border font-medium text-sm rounded-t-lg transition-colors duration-150 focus:outline-none flex items-center gap-2 ${
+                          className={`whitespace-nowrap py-2 px-3.5 border font-semibold text-sm rounded-t-lg transition-all duration-150 focus:outline-none flex items-center gap-2 shadow-xs ${
                             active_task_tab === "pending" ? "cursor-grab" : ""
                           } ${
                             hasUrgentTask
                               ? isSelected
-                                ? "bg-red-100 border-red-400 border-b-red-100 text-red-900 font-bold shadow-xs"
+                                ? "bg-red-600 border-red-600 text-white font-bold shadow-md shadow-red-500/20 -mb-px z-10"
                                 : "bg-red-50 border-red-300 border-b-gray-200 text-red-800 hover:bg-red-100 font-medium"
                               : isSelected
-                                ? "bg-gray-50 border-gray-200 border-b-gray-50 text-blue-600 font-semibold"
-                                : "bg-white border-transparent border-b-gray-200 text-gray-500 hover:text-gray-700"
+                                ? "bg-blue-600 border-blue-600 text-white font-bold shadow-md shadow-blue-500/20 -mb-px z-10"
+                                : "bg-gray-100 border-gray-200 border-b-gray-200 text-gray-700 hover:bg-gray-200 hover:text-gray-900"
                           } ${
                             dragged_group_location === location
                               ? "opacity-30"
@@ -1838,7 +1854,9 @@ const HomePage: React.FC<HomePageProps> = ({
                             {location}
                             {hasUrgentTask && (
                               <span
-                                className="w-2 h-2 rounded-full bg-red-600 animate-pulse flex-shrink-0"
+                                className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                                  isSelected ? "bg-white" : "bg-red-600 animate-pulse"
+                                }`}
                                 title="يوجد مهمة عاجلة في هذا المكان"
                               />
                             )}

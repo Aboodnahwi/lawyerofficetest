@@ -1,4 +1,5 @@
 import * as React from "react";
+import Logo from "../components/Logo";
 import { get_supabase_client } from "../supabaseClient";
 import {
   check_supabase_schema,
@@ -210,7 +211,10 @@ const LoginPage: React.FC<auth_page_props> = ({
         admin_tasks: remote_flat_data.admin_tasks || [],
         appointments: remote_flat_data.appointments || [],
         accounting_entries: remote_flat_data.accounting_entries || [],
-        assistants: (remote_flat_data.assistants || []).map((a) => a.name),
+        assistants: (remote_flat_data.assistants || []).map((a: any) => ({
+          name: a.name,
+          user_id: a.user_id,
+        })),
         invoices: (remote_flat_data.invoices || []).map((inv) => ({
           ...inv,
           items: invoice_item_map.get(inv.id) || [],
@@ -507,61 +511,146 @@ const LoginPage: React.FC<auth_page_props> = ({
     set_error(null);
     try {
       if (!supabase) throw new Error("Client not initialized");
-      const normalized_mobile = normalize_mobile_for_db(form.mobile);
+      const normalized_mobile = normalize_mobile_for_db(form.mobile) || form.mobile;
+      const e164_phone = normalize_mobile_to_e164(form.mobile) || form.mobile;
       if (!normalized_mobile) throw new Error("رقم الجوال غير صالح.");
+
       const { data: is_verified, error: rpc_error } = await supabase.rpc(
         "verify_mobile_otp",
         { target_mobile: normalized_mobile, code_to_check: otp_code.trim() },
       );
       if (rpc_error) throw rpc_error;
       if (is_verified) {
-        // Automatically approve and activate the user with a 1-month free trial
-        const now = new Date();
-        const oneMonthLater = new Date(
-          now.getFullYear(),
-          now.getMonth() + 1,
-          now.getDate(),
+        // Fetch current profile to check if trial was already used (search all mobile formats)
+        const { data: profileData } = await supabase
+          .from("profiles")
+          .select("*")
+          .or(`mobile_number.eq.${normalized_mobile},mobile_number.eq.${form.mobile},mobile_number.eq.${e164_phone}`)
+          .maybeSingle();
+
+        const hasUsedTrial = Boolean(
+          profileData?.trial_used || profileData?.trialUsed
         );
 
-        const { error: updateError } = await supabase
-          .from("profiles")
-          .update({
+        // Calculate exact 45 days trial duration from today
+        const now = new Date();
+        const fortyFiveDaysLater = new Date(
+          now.getFullYear(),
+          now.getMonth(),
+          now.getDate() + 45
+        );
+        const startDateStr = to_input_date_string(now);
+        const endDateStr = to_input_date_string(fortyFiveDaysLater);
+
+        if (!hasUsedTrial) {
+          // First-time activation: Automatically approve and activate for 45 full days
+          const updatePayload: any = {
             is_approved: true,
             is_active: true,
-            subscription_start_date: to_input_date_string(now),
-            subscription_end_date: to_input_date_string(oneMonthLater),
+            mobile_verified: true,
+            trial_used: true,
+            subscription_start_date: startDateStr,
+            subscription_end_date: endDateStr,
             updated_at: now.toISOString(),
-          })
-          .eq("mobile_number", normalized_mobile);
+          };
 
-        if (updateError) {
-          console.error("Failed to auto-activate profile:", updateError);
-          // Even if update fails, we might want to show the waiting message as fallback
-          // but since the user specifically asked for immediate activation, we'll try to proceed
-        }
+          // 1. Update by profile ID if found
+          if (profileData?.id) {
+            let { error: updateError } = await supabase
+              .from("profiles")
+              .update(updatePayload)
+              .eq("id", profileData.id);
 
-        set_message(
-          "تم تفعيل حسابك بنجاح ومنحك فترة تجريبية لمدة شهر مجاناً. جاري تسجيل الدخول...",
-        );
+            if (updateError && updateError.message?.toLowerCase().includes("trial_used")) {
+              const { trial_used, ...fallbackPayload } = updatePayload;
+              await supabase
+                .from("profiles")
+                .update(fallbackPayload)
+                .eq("id", profileData.id);
+            }
+          }
 
-        if (on_verification_success) {
-          on_verification_success();
+          // 2. Also update by mobile numbers to be 100% resilient
+          await supabase
+            .from("profiles")
+            .update(updatePayload)
+            .or(`mobile_number.eq.${normalized_mobile},mobile_number.eq.${form.mobile},mobile_number.eq.${e164_phone}`);
+
+          set_message(
+            `تم تفعيل حسابك تلقائياً بنجاح لفترة تجريبية مجانية لمدة 45 يوماً كاملة (حتى ${endDateStr}). جاري الدخول...`
+          );
+
+          if (on_verification_success) {
+            on_verification_success();
+          } else {
+            if (form.password) {
+              const phone = normalize_mobile_to_e164(form.mobile);
+              const email = `sy${phone!.substring(1)}@email.com`;
+              const { data: sign_in_data } =
+                await supabase.auth.signInWithPassword({
+                  email,
+                  password: form.password,
+                });
+              if (sign_in_data.user) {
+                // Ensure profile updated by user.id as well
+                await supabase
+                  .from("profiles")
+                  .update(updatePayload)
+                  .eq("id", sign_in_data.user.id);
+
+                sessionStorage.setItem(`just_logged_in_user_${sign_in_data.user.id}`, "true");
+                on_login_success(sign_in_data.user);
+              }
+            } else {
+              set_auth_step("login");
+              set_otp_code("");
+            }
+          }
         } else {
-          if (form.password) {
-            const phone = normalize_mobile_to_e164(form.mobile);
-            const email = `sy${phone!.substring(1)}@email.com`;
-            const { data: sign_in_data } =
-              await supabase.auth.signInWithPassword({
-                email,
-                password: form.password,
-              });
-            if (sign_in_data.user) {
-              sessionStorage.setItem(`just_logged_in_user_${sign_in_data.user.id}`, "true");
-              on_login_success(sign_in_data.user);
+          // Trial has already been used in the past -> Only admin can activate
+          const phoneFilter = `mobile_number.eq.${normalized_mobile},mobile_number.eq.${form.mobile},mobile_number.eq.${e164_phone}`;
+          if (profileData?.id) {
+            await supabase
+              .from("profiles")
+              .update({
+                mobile_verified: true,
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", profileData.id);
+          } else {
+            await supabase
+              .from("profiles")
+              .update({
+                mobile_verified: true,
+                updated_at: new Date().toISOString(),
+              })
+              .or(phoneFilter);
+          }
+
+          if (profileData?.is_approved) {
+            // Already approved by admin
+            set_message("تم تأكيد كود التحقق بنجاح. جاري تسجيل الدخول...");
+            if (on_verification_success) {
+              on_verification_success();
+            } else if (form.password) {
+              const phone = normalize_mobile_to_e164(form.mobile);
+              const email = `sy${phone!.substring(1)}@email.com`;
+              const { data: sign_in_data } =
+                await supabase.auth.signInWithPassword({
+                  email,
+                  password: form.password,
+                });
+              if (sign_in_data.user) {
+                sessionStorage.setItem(`just_logged_in_user_${sign_in_data.user.id}`, "true");
+                on_login_success(sign_in_data.user);
+              }
             }
           } else {
-            set_auth_step("login");
-            set_otp_code("");
+            // Needs admin approval
+            set_message(
+              "تم التحقق من رقم الجوال بنجاح. لقد تم استهلاك الفترة التجريبية (45 يوماً) مسبقاً لهذا الحساب. تفعيل الحساب أو التجديد يتم حصراً من قبل المدير."
+            );
+            set_waiting_approval(true);
           }
         }
       } else {
@@ -786,16 +875,16 @@ const LoginPage: React.FC<auth_page_props> = ({
           if (standard_data.user) {
             // Create profile manually since trigger might be missing
             const now = new Date();
-            const oneYearLater = new Date(
-              now.getFullYear() + 1,
+            const fortyFiveDaysLater = new Date(
+              now.getFullYear(),
               now.getMonth(),
-              now.getDate(),
+              now.getDate() + 45
             );
             await supabase.from("profiles").upsert([
               {
                 id: standard_data.user.id,
                 full_name: form.full_name,
-                mobile_number: form.mobile,
+                mobile_number: normalized_mobile,
                 role: is_assistant_signup
                   ? "assistant"
                   : email === "nahwiabdo@gmail.com" ||
@@ -803,12 +892,13 @@ const LoginPage: React.FC<auth_page_props> = ({
                       email === "sy963958932922@email.com"
                     ? "admin"
                     : "user",
-                is_approved: false, // All new users must be approved by admin
+                is_approved: false, // All new users must enter verification code to activate
                 is_active: true,
                 mobile_verified: false,
+                trial_used: false,
                 lawyer_id: null,
                 subscription_start_date: to_input_date_string(now),
-                subscription_end_date: to_input_date_string(oneYearLater),
+                subscription_end_date: to_input_date_string(fortyFiveDaysLater),
               },
             ]);
 
@@ -824,17 +914,17 @@ const LoginPage: React.FC<auth_page_props> = ({
           }
         } else if (data.user) {
           const now = new Date();
-          const oneYearLater = new Date(
-            now.getFullYear() + 1,
+          const fortyFiveDaysLater = new Date(
+            now.getFullYear(),
             now.getMonth(),
-            now.getDate(),
+            now.getDate() + 45
           );
           // Create profile manually for admin-created user
           await supabase.from("profiles").upsert([
             {
               id: data.user.id,
               full_name: form.full_name,
-              mobile_number: form.mobile,
+              mobile_number: normalized_mobile,
               role: is_assistant_signup
                 ? "assistant"
                 : email === "nahwiabdo@gmail.com" ||
@@ -842,12 +932,13 @@ const LoginPage: React.FC<auth_page_props> = ({
                     email === "sy963958932922@email.com"
                   ? "admin"
                   : "user",
-              is_approved: false, // All new users must be approved by admin
+              is_approved: false, // All new users must enter verification code to activate
               is_active: true,
               mobile_verified: false, // Set to false so they go through activation
+              trial_used: false,
               lawyer_id: null,
               subscription_start_date: to_input_date_string(now),
-              subscription_end_date: to_input_date_string(oneYearLater),
+              subscription_end_date: to_input_date_string(fortyFiveDaysLater),
             },
           ]);
 
@@ -946,7 +1037,8 @@ const LoginPage: React.FC<auth_page_props> = ({
       dir="rtl"
     >
       <div className="w-full max-w-md">
-        <div className="text-center mb-6">
+        <div className="text-center mb-6 flex flex-col items-center">
+          <Logo size="xl" className="h-28 w-28 mb-3" />
           <h1 className="text-3xl font-bold text-gray-800">مكتب المحامي</h1>
           <p className="text-gray-500">إدارة أعمال المحاماة بكفاءة</p>
           <div className="flex flex-col items-center gap-2 mt-2">
@@ -1021,16 +1113,15 @@ const LoginPage: React.FC<auth_page_props> = ({
                   <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800">
                     <div className="flex items-center gap-2 mb-2">
                       <ExclamationCircleIcon className="w-5 h-5" />
-                      <p className="font-bold">تنبيه هام:</p>
+                      <p className="font-bold">تفعيل الحساب (فترة تجريبية 45 يوماً):</p>
                     </div>
                     <p className="mb-2">
-                      يجب عليك إدخال كود التفعيل الذي يزودك به المدير لتتمكن من
-                      استخدام التطبيق.
+                      عند إدخال كود التحقق الصحيح لأول مرة، سيتم تفعيل حسابك تلقائياً وبشكل مجاني لمدة 45 يوماً.
                     </p>
-                    <ol className="list-decimal list-inside space-y-1 font-medium">
-                      <li>اضغط على الزر الأخضر أدناه لطلب الكود من المدير.</li>
-                      <li>سيتم فتح واتساب لإرسال رسالة للمدير.</li>
-                      <li>بعد استلام الكود، أدخله في المربعات أدناه.</li>
+                    <ol className="list-decimal list-inside space-y-1 font-medium text-xs">
+                      <li>اضغط على الزر أدناه لطلب كود التحقق من المدير عبر واتساب.</li>
+                      <li>بعد استلام الكود، أدخله في المربع أدناه للتفعيل الفوري.</li>
+                      <li>بعد انتهاء فترة الـ 45 يوماً، يتم تجديد التفعيل حصراً من قبل المدير.</li>
                     </ol>
                   </div>
 
@@ -1361,7 +1452,7 @@ const LoginPage: React.FC<auth_page_props> = ({
         </div>
 
         <div className="mt-8 text-center">
-          <p className="text-xs text-gray-400 mb-1">الإصدار: 30-04-2026</p>
+          <p className="text-xs text-gray-400 mb-1">الإصدار: 18-8-2026</p>
           <p className="text-xs text-gray-400">
             جميع حقوق الملكية محفوظة لشركة الحلول التقنية ©{" "}
             {new Date().getFullYear()}
