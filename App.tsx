@@ -259,7 +259,7 @@ const App: React.FC<{ onRefresh: () => void }> = ({ onRefresh }) => {
   const data = useSupabaseData(session?.user ?? null, isAuthLoading);
 
   const handle_generate_agenda = (event: React.MouseEvent) => {
-    const pending_tasks = data.admin_tasks.filter((t) => !t.completed);
+    const pending_tasks = data.admin_tasks.filter((t) => !t.completed && (t.task_type || "admin") === "admin");
     const grouped_pending: Record<string, AdminTask[]> = pending_tasks.reduce(
       (acc, task) => {
         const location = task.location || "غير محدد";
@@ -660,8 +660,9 @@ const App: React.FC<{ onRefresh: () => void }> = ({ onRefresh }) => {
       />
     );
   if (
-    data.sync_status === "unconfigured" ||
-    data.sync_status === "uninitialized"
+    (data.sync_status === "unconfigured" ||
+      data.sync_status === "uninitialized") &&
+    data.is_local_empty
   )
     return (
       <ConfigurationModal onRetry={() => data.manual_sync({ force: true })} />

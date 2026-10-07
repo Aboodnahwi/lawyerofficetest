@@ -90,7 +90,6 @@ const construct_data = (flat_data: Partial<FlatData>): AppData => {
         importance: t.importance || "normal",
         assignee: t.assignee,
         image_url: t.image_url,
-        audio_url: t.audio_url,
         updated_at: t.updated_at,
       }));
 
@@ -101,12 +100,7 @@ const construct_data = (flat_data: Partial<FlatData>): AppData => {
       task_map.set(
         t.id,
         existing
-          ? {
-              ...existing,
-              ...t,
-              image_url: t.image_url || existing.image_url,
-              audio_url: t.audio_url || existing.audio_url,
-            }
+          ? { ...existing, ...t, image_url: t.image_url || existing.image_url }
           : t,
       );
     });
@@ -238,25 +232,10 @@ const merge_for_refresh = <T extends { id: any; updated_at?: Date | string }>(
         final_items.set(id, merged);
       }
     } else {
-      // Local item is NOT in remote.
-      // Has it been created / modified locally after the last sync?
-      const local_date = safe_revive_date(
-        local_item.updated_at || 0,
-      ).getTime();
-      const is_locally_created_after_sync =
-        last_synced_time && last_synced_time > 0
-          ? local_date > last_synced_time + 2000
-          : false;
-
-      if (is_locally_created_after_sync) {
-        final_items.set(id, local_item);
-      } else {
-        // Existed at/before last sync and is missing from remote -> Remotely deleted!
-        console.log(
-          `[Realtime Sync] Dropped remotely deleted item from ${key}:`,
-          id,
-        );
-      }
+      // Local item is NOT in remote, and not marked as deleted.
+      // This is a new local item that hasn't been synced yet, or a locally updated item.
+      // We rely on sync_deletions for actual remote deletions.
+      final_items.set(id, local_item);
     }
   }
 
@@ -699,7 +678,7 @@ export const use_sync = ({
         // FETCH IN PARALLEL for speed
         const [remote_data_raw, remote_deletions] = await Promise.all([
           fetch_data_from_supabase(effective_user_id_ref.current || current_user.id),
-          fetch_deletions_from_supabase()
+          fetch_deletions_from_supabase(effective_user_id_ref.current || current_user.id)
         ]);
         
         log("info", "تم جلب البيانات، جاري الدمج والمزامنة المحلية...");
@@ -878,13 +857,10 @@ export const use_sync = ({
                   key === "case_documents" ? "documents" : key
                 ]?.has(id);
 
-              const storedLastSync = getStoredLastSyncTime(current_user.id);
-              // If we have synced previously, and this item was updated before/at the last sync,
-              // it means it was previously in the cloud and was deleted on the cloud by another user!
-              const is_remotely_deleted =
-                !is_deleted &&
-                storedLastSync > 0 &&
-                local_date <= storedLastSync + 2000;
+              // We rely on the sync_deletions table to track actual remote deletions.
+              // Timestamp heuristics are dangerous because newly created offline items might 
+              // have timestamps close to the last sync time and get falsely flagged and dropped.
+              const is_remotely_deleted = false;
 
               if (!is_deleted && !is_remotely_deleted) {
                 // Genuinely new local offline item
@@ -1115,11 +1091,13 @@ export const use_sync = ({
             "تعذر الاتصال بالخادم. يرجى التحقق من اتصالك بالإنترنت، أو التأكد من أن مشروع Supabase الخاص بك يعمل (غير متوقف).";
         }
 
-        if (
+        const isSchemaMismatch =
           (error_message_raw.includes("column") &&
             error_message_raw.includes("does not exist")) ||
-          error_message_raw.includes("relation")
-        ) {
+          (error_message_raw.includes("relation") &&
+            error_message_raw.includes("does not exist"));
+
+        if (isSchemaMismatch) {
           set_status(
             "uninitialized",
             `هناك عدم تطابق في مخطط قاعدة البيانات: ${error_message}`,

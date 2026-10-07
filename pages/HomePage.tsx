@@ -37,7 +37,6 @@ import { useDebounce } from "../hooks/useDebounce";
 import { useData } from "../context/DataContext";
 import { useFeedback } from "../context/FeedbackContext";
 import TrialReminderBanner from "../components/TrialReminderBanner";
-import AudioPlayer from "../components/AudioPlayer";
 
 // ... (Constants importanceMap, importanceMapAdminTasks, formatTime, and AppointmentsTable remain the same)
 const importance_map: { [key: string]: { text: string; className: string } } = {
@@ -268,7 +267,7 @@ const HomePage: React.FC<HomePageProps> = ({
   const [date_warning, set_date_warning] = React.useState<string | null>(null);
 
   const [active_task_tab, set_active_task_tab] = React.useState<
-    "pending" | "completed"
+    "pending" | "completed" | "office_pending" | "office_completed"
   >("pending");
   const [admin_task_search, set_admin_task_search] = React.useState("");
   const debounced_admin_task_search = useDebounce(admin_task_search, 300);
@@ -663,9 +662,6 @@ const HomePage: React.FC<HomePageProps> = ({
       `*الأهمية:* ${importance_map_admin_tasks[task.importance]?.text}`,
       `*المسؤول:* ${task.assignee || "غير محدد"}`,
     ];
-    if (task.audio_url) {
-      lines.push(`*ملاحظة:* يوجد ملاحظة صوتية مرفقة مع هذه المهمة في التطبيق.`);
-    }
     if (task.image_url) {
       lines.push(`*ملاحظة:* يوجد صورة مرفقة مع هذه المهمة في التطبيق.`);
     }
@@ -1095,9 +1091,15 @@ const HomePage: React.FC<HomePageProps> = ({
           safe_revive_date(b.date).getTime(),
       );
   }, [unpostponed_sessions, selected_date]);
+  const targetType = active_task_tab.startsWith("office") ? "office" : "admin";
+
   const grouped_tasks: Record<string, AdminTask[]> = React.useMemo(() => {
-    const isCompleted = active_task_tab === "completed";
+    const isCompleted = active_task_tab === "completed" || active_task_tab === "office_completed";
+
     const filtered = admin_tasks.filter((task) => {
+      const taskType = task.task_type || "admin";
+      if (taskType !== targetType) return false;
+
       const searchLower = debounced_admin_task_search.toLowerCase();
       const matchesSearch =
         searchLower === "" ||
@@ -1122,6 +1124,22 @@ const HomePage: React.FC<HomePageProps> = ({
       },
       {} as Record<string, AdminTask[]>,
     );
+  }, [admin_tasks, active_task_tab, debounced_admin_task_search]);
+
+  const office_tasks_list = React.useMemo(() => {
+    const isCompleted = active_task_tab === "office_completed";
+    return admin_tasks
+      .filter((task) => {
+        const taskType = task.task_type || "admin";
+        if (taskType !== "office") return false;
+        const searchLower = debounced_admin_task_search.toLowerCase();
+        const matchesSearch =
+          searchLower === "" ||
+          task.task.toLowerCase().includes(searchLower) ||
+          (task.assignee && task.assignee.toLowerCase().includes(searchLower));
+        return task.completed === isCompleted && matchesSearch;
+      })
+      .sort((a, b) => (a.order_index ?? Infinity) - (b.order_index ?? Infinity));
   }, [admin_tasks, active_task_tab, debounced_admin_task_search]);
 
   React.useEffect(() => {
@@ -1193,12 +1211,12 @@ const HomePage: React.FC<HomePageProps> = ({
   const render_task_item = (task: AdminTask, location: string) => (
     <div
       key={task.id}
-      draggable={active_task_tab === "pending"}
+      draggable={active_task_tab === "pending" || active_task_tab === "office_pending"}
       onDragStart={(e) => handle_drag_start(e, "task", task.id)}
       onDragEnd={handle_drag_end}
       onDragOver={(e) => {
         if (
-          active_task_tab !== "pending" ||
+          (active_task_tab !== "pending" && active_task_tab !== "office_pending") ||
           !dragged_task_id.current ||
           dragged_task_id.current === task.id
         )
@@ -1214,7 +1232,7 @@ const HomePage: React.FC<HomePageProps> = ({
         set_drop_position(null);
       }}
       onDrop={(e) => {
-        if (active_task_tab !== "pending" || !drop_position) return;
+        if ((active_task_tab !== "pending" && active_task_tab !== "office_pending") || !drop_position) return;
         e.preventDefault();
         e.stopPropagation();
         handle_task_drop(task.id, location, drop_position);
@@ -1225,7 +1243,7 @@ const HomePage: React.FC<HomePageProps> = ({
       onTouchStart={(e) => handle_admin_task_touch_start(e, task)}
       onTouchEnd={handle_admin_task_touch_end}
       onTouchMove={handle_admin_task_touch_end}
-      className={`relative p-3 border rounded-lg transition-all duration-150 ${dragged_task_id.current === task.id ? "opacity-40 scale-95" : "opacity-100 scale-100"} ${task.completed ? "bg-green-50/70 border-green-200" : "bg-white border-gray-200 hover:bg-gray-50 hover:shadow-sm"} ${active_task_tab === "pending" ? "cursor-move" : ""}`}
+      className={`relative p-3 border rounded-lg transition-all duration-150 ${dragged_task_id.current === task.id ? "opacity-40 scale-95" : "opacity-100 scale-100"} ${task.completed ? "bg-green-50/70 border-green-200" : "bg-white border-gray-200 hover:bg-gray-50 hover:shadow-sm"} ${active_task_tab === "pending" || active_task_tab === "office_pending" ? "cursor-move" : ""}`}
     >
       {" "}
       {drag_over_task_id === task.id && drop_position === "before" && (
@@ -1271,11 +1289,6 @@ const HomePage: React.FC<HomePageProps> = ({
                 }}
                 className="w-24 h-24 sm:w-32 sm:h-32 object-cover rounded-lg border border-gray-200 cursor-pointer hover:opacity-90 hover:shadow-md transition-all"
               />
-            </div>
-          )}
-          {task.audio_url && (
-            <div className="mt-2.5 max-w-md">
-              <AudioPlayer src={task.audio_url} />
             </div>
           )}
           <div className="mt-2 flex items-center gap-x-4 gap-y-2 text-sm text-gray-600">
@@ -1572,10 +1585,18 @@ const HomePage: React.FC<HomePageProps> = ({
           <div className="sticky -top-4 sm:-top-6 z-20 bg-white pt-4 pb-3 space-y-4 -mx-4 px-4 sm:-mx-6 sm:px-6 shadow-sm border-b border-gray-200 rounded-t-lg">
             <div className="flex justify-between items-center flex-wrap gap-4">
               <div className="flex items-center gap-4">
-                <h2 className="text-2xl font-semibold">المهام الإدارية</h2>
+                <h2 className="text-2xl font-semibold">
+                  المهام
+                </h2>
                 {permissions.can_add_admin_task && (
                   <button
-                    onClick={() => on_open_admin_task_modal(active_location_tab ? { location: active_location_tab } : undefined)}
+                    onClick={() => {
+                      const isOffice = active_task_tab.startsWith("office");
+                      on_open_admin_task_modal({
+                        task_type: isOffice ? "office" : "admin",
+                        location: active_location_tab || "",
+                      });
+                    }}
                     className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition-colors text-sm shadow-xs"
                   >
                     <PlusIcon className="w-5 h-5" />
@@ -1615,25 +1636,81 @@ const HomePage: React.FC<HomePageProps> = ({
               </div>
             </div>
 
-            <div className="border-b border-gray-100 pt-1">
-              <nav className="-mb-px flex space-x-4" aria-label="Tabs">
-                <button
-                  onClick={() => set_active_task_tab("pending")}
-                  className={`whitespace-nowrap py-2 px-4 border-b-2 font-medium text-sm ${active_task_tab === "pending" ? "border-blue-500 text-blue-600 font-semibold" : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"}`}
-                >
-                  المهام المعلقة
-                </button>
-                <button
-                  onClick={() => set_active_task_tab("completed")}
-                  className={`whitespace-nowrap py-2 px-4 border-b-2 font-medium text-sm ${active_task_tab === "completed" ? "border-blue-500 text-blue-600 font-semibold" : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"}`}
-                >
-                  المهام المنجزة
-                </button>
-              </nav>
-            </div>
+             <div className="border-b border-gray-100 pt-1 space-y-3">
+               <div className="inline-flex p-1.5 bg-gray-100 rounded-xl gap-2 shadow-inner">
+                 <button
+                   onClick={() => set_active_task_tab("pending")}
+                   className={`flex items-center gap-2 px-6 py-2.5 rounded-lg font-bold text-sm transition-all duration-200 ${
+                     !active_task_tab.startsWith("office")
+                       ? "bg-blue-600 text-white shadow-md shadow-blue-500/25"
+                       : "text-gray-600 hover:text-gray-900 hover:bg-gray-200/60"
+                   }`}
+                 >
+                   <span>خارج المكتب</span>
+                 </button>
+                 <button
+                   onClick={() => set_active_task_tab("office_pending")}
+                   className={`flex items-center gap-2 px-6 py-2.5 rounded-lg font-bold text-sm transition-all duration-200 ${
+                     active_task_tab.startsWith("office")
+                       ? "bg-indigo-600 text-white shadow-md shadow-indigo-500/25"
+                       : "text-gray-600 hover:text-gray-900 hover:bg-gray-200/60"
+                   }`}
+                 >
+                   <span>مهام المكتب</span>
+                 </button>
+               </div>
+               {!active_task_tab.startsWith("office") && (
+                 <div className="flex items-center gap-2 pt-2 pb-1 animate-fade-in">
+                   <span className="text-xs font-semibold text-gray-600">حالة المهام:</span>
+                   <button
+                     onClick={() => set_active_task_tab("pending")}
+                     className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${active_task_tab === "pending" ? "bg-blue-600 text-white shadow-xs" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
+                   >
+                     المعلقة
+                   </button>
+                   <button
+                     onClick={() => set_active_task_tab("completed")}
+                     className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${active_task_tab === "completed" ? "bg-blue-600 text-white shadow-xs" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
+                   >
+                     المنجزة
+                   </button>
+                 </div>
+               )}
+               {active_task_tab.startsWith("office") && (
+                 <div className="flex items-center gap-2 pt-2 pb-1 animate-fade-in">
+                   <span className="text-xs font-semibold text-gray-600">حالة مهام المكتب:</span>
+                   <button
+                     onClick={() => set_active_task_tab("office_pending")}
+                     className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${active_task_tab === "office_pending" ? "bg-indigo-600 text-white shadow-xs" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
+                   >
+                     المعلقة
+                   </button>
+                   <button
+                     onClick={() => set_active_task_tab("office_completed")}
+                     className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${active_task_tab === "office_completed" ? "bg-indigo-600 text-white shadow-xs" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
+                   >
+                     المنجزة
+                   </button>
+                 </div>
+               )}
+             </div>
           </div>
 
-          {admin_tasks_layout === "vertical" ? (
+          {active_task_tab.startsWith("office") ? (
+            <div className="pt-4">
+              <div
+                className="p-4 space-y-3 rounded-lg min-h-[200px] bg-gray-50 border border-gray-200"
+              >
+                {office_tasks_list.length > 0 ? (
+                  office_tasks_list.map((task) => render_task_item(task, "المكتب"))
+                ) : (
+                  <p className="text-center text-gray-500 py-8">
+                    لا توجد مهام مكتبية لعرضها.
+                  </p>
+                )}
+              </div>
+            </div>
+          ) : admin_tasks_layout === "vertical" ? (
             <div className="flex flex-row gap-4 pt-4">
               {location_order.length > 0 && (
                 <div className="flex flex-col gap-2 w-32 sm:w-40 flex-shrink-0 sticky top-32 self-start">
@@ -1653,7 +1730,8 @@ const HomePage: React.FC<HomePageProps> = ({
                           (t) =>
                             (t.location || "غير محدد") === location &&
                             !t.completed &&
-                            t.importance === "urgent",
+                            t.importance === "urgent" &&
+                            (t.task_type || "admin") === targetType,
                         );
                       const isSelected = active_location_tab === location;
                       return (
@@ -1784,7 +1862,8 @@ const HomePage: React.FC<HomePageProps> = ({
                           (t) =>
                             (t.location || "غير محدد") === location &&
                             !t.completed &&
-                            t.importance === "urgent",
+                            t.importance === "urgent" &&
+                            (t.task_type || "admin") === targetType,
                         );
                       const isSelected = active_location_tab === location;
                       return (

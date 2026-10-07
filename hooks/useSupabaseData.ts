@@ -125,7 +125,6 @@ const migrate_data = (old_data: any): AppData => {
         importance: t.importance || "normal",
         assignee: t.assignee,
         image_url: img,
-        audio_url: t.audio_url || t.audioUrl,
         updated_at: t.updated_at || t.updatedAt,
       };
     }),
@@ -165,10 +164,10 @@ const migrate_data = (old_data: any): AppData => {
       assignee: t.assignee,
       location: t.location,
       image_url: img,
-      audio_url: t.audio_url || t.audioUrl,
       case_id: t.case_id || t.caseId,
       updated_at: t.updated_at || t.updatedAt,
       order_index: t.order_index ?? t.orderIndex,
+      task_type: t.task_type || t.taskType || "admin",
     };
   };
 
@@ -943,6 +942,8 @@ export const useSupabaseData = (
         return migrate_data(merged);
       });
       set_dirty(true);
+      set_sync_status("synced");
+      set_last_sync_error(null);
     },
     [],
   );
@@ -987,7 +988,8 @@ export const useSupabaseData = (
       is_auto_sync_enabled &&
       is_online &&
       user &&
-      sync_status !== "syncing"
+      sync_status !== "syncing" &&
+      sync_status !== "error"
     ) {
       const timer = setTimeout(() => {
         console.log("Auto-syncing local changes to cloud in background...");

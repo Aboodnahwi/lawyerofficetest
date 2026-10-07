@@ -3,7 +3,6 @@ import { Case, CaseTask, AdminTask } from "../types";
 import { PlusIcon, TrashIcon, CheckCircleIcon, PencilIcon } from "./icons";
 import AdminTaskModal from "./AdminTaskModal";
 import { useData } from "../context/DataContext";
-import AudioPlayer from "./AudioPlayer";
 
 interface CaseTasksProps {
   caseItem: Case;
@@ -81,7 +80,6 @@ const CaseTasks: React.FC<CaseTasksProps> = ({ caseItem, clientName, onUpdateTas
         importance: taskData.importance,
         assignee: taskData.assignee,
         image_url: taskData.image_url,
-        audio_url: taskData.audio_url,
       };
       onUpdateTasks([...tasks, newTask]);
 
@@ -92,7 +90,6 @@ const CaseTasks: React.FC<CaseTasksProps> = ({ caseItem, clientName, onUpdateTas
         location: taskData.location || "غير محدد",
         case_id: caseItem.id,
         image_url: taskData.image_url,
-        audio_url: taskData.audio_url,
       };
       set_admin_tasks((prev) => [...prev, globalTask]);
     }
@@ -153,11 +150,6 @@ const CaseTasks: React.FC<CaseTasksProps> = ({ caseItem, clientName, onUpdateTas
                   onClick={() => setSelectedTaskImageUrl(task.image_url!)}
                   className="w-20 h-20 object-cover rounded-lg border border-gray-200 cursor-pointer hover:opacity-90 hover:shadow-md transition-all"
                 />
-              </div>
-            )}
-            {task.audio_url && (
-              <div className="mr-7 max-w-sm">
-                <AudioPlayer src={task.audio_url} />
               </div>
             )}
           </div>

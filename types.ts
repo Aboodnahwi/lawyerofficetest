@@ -146,7 +146,6 @@ export interface CaseTask {
   importance: "normal" | "important" | "urgent";
   assignee?: string;
   image_url?: string;
-  audio_url?: string;
   updated_at?: string;
 }
 
@@ -184,9 +183,9 @@ export interface AdminTask {
   location?: string;
   case_id?: string;
   image_url?: string;
-  audio_url?: string;
   updated_at?: string;
   order_index?: number;
+  task_type?: "admin" | "office";
 }
 
 export interface Appointment {

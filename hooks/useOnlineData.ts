@@ -229,8 +229,20 @@ export const fetch_data_from_supabase = async (
           chunk = res.data || [];
           break;
         } catch (err: any) {
-          table_attempt++;
           const message = String(err.message || "").toLowerCase();
+          const is_missing_table_error =
+            err.code === "42P01" ||
+            (message.includes("relation") && message.includes("does not exist")) ||
+            message.includes("does not exist");
+
+          if (is_missing_table_error) {
+            console.warn(
+              `Table "${table}" does not exist in Supabase database. Gracefully skipping and returning empty array.`
+            );
+            return [];
+          }
+
+          table_attempt++;
           const is_network_error =
             message.includes("failed to fetch") ||
             message.includes("abort") ||
@@ -532,6 +544,17 @@ export const delete_data_from_supabase = async (
       while (attempt < max_retries) {
         try {
           if (table !== "profiles") {
+            // Pre-emptively update user_id of the rows to delete to prevent database triggers
+            // from receiving NULL OLD.user_id and violating the NOT NULL constraint on sync_deletions.user_id.
+            try {
+              await supabase
+                .from(table)
+                .update({ user_id: user_id_to_use })
+                .in(primary_key_column, ids);
+            } catch (update_err) {
+              console.warn(`[SyncDeletions Update] Non-fatal pre-delete update warning for ${table}:`, update_err);
+            }
+
             const deletions_log = ids.map((id: string) => ({
               table_name: table,
               record_id: id,
@@ -553,6 +576,18 @@ export const delete_data_from_supabase = async (
           break; // Success
         } catch (err: any) {
           const message = String(err.message || "").toLowerCase();
+          const is_missing_table_error =
+            err.code === "42P01" ||
+            (message.includes("relation") && message.includes("does not exist")) ||
+            message.includes("does not exist");
+
+          if (is_missing_table_error) {
+            console.warn(
+              `Table "${table}" does not exist in Supabase database during deletion. Gracefully skipping.`
+            );
+            break; // Stop attempting for this table and skip gracefully
+          }
+
           if (
             (message.includes("abort") ||
               message.includes("lock") ||
@@ -668,6 +703,7 @@ export const upsert_data_to_supabase = async (
         image_url: task.image_url,
         updated_at: task.updated_at,
         order_index: task.order_index,
+        task_type: task.task_type || "admin",
         user_id: task.user_id || user_id_to_use,
       };
     }),
@@ -875,6 +911,18 @@ export const upsert_data_to_supabase = async (
             return successful_records;
           }
 
+          const is_missing_table_error =
+            error.code === "42P01" ||
+            (message.includes("relation") && message.includes("does not exist")) ||
+            message.includes("does not exist");
+
+          if (is_missing_table_error) {
+            console.warn(
+              `Table "${table}" does not exist in Supabase database during upsert error handling. Gracefully skipping.`
+            );
+            return [];
+          }
+
           // If single record batch had a missing column or schema error
           if (
             message.includes("column") ||
@@ -916,6 +964,18 @@ export const upsert_data_to_supabase = async (
         return response_data || [];
       } catch (err: any) {
         const message = String(err.message || "").toLowerCase();
+        const is_missing_table_error =
+          err.code === "42P01" ||
+          (message.includes("relation") && message.includes("does not exist")) ||
+          message.includes("does not exist");
+
+        if (is_missing_table_error) {
+          console.warn(
+            `Table "${table}" does not exist in Supabase database during upsert catch block. Gracefully skipping.`
+          );
+          return [];
+        }
+
         if (
           (message.includes("abort") ||
             message.includes("lock") ||
@@ -1007,6 +1067,7 @@ export const transform_remote_to_local = (remote: any): Partial<FlatData> => {
         ...task,
         task: cleanTask,
         image_url: img,
+        task_type: task.task_type || "admin",
       };
     }),
     appointments: remote.appointments || [],
