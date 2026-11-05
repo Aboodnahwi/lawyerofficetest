@@ -3,6 +3,7 @@ import { Case, CaseTask, AdminTask } from "../types";
 import { PlusIcon, TrashIcon, CheckCircleIcon, PencilIcon } from "./icons";
 import AdminTaskModal from "./AdminTaskModal";
 import { useData } from "../context/DataContext";
+import AudioPlayer from "./AudioPlayer";
 
 interface CaseTasksProps {
   caseItem: Case;
@@ -80,6 +81,7 @@ const CaseTasks: React.FC<CaseTasksProps> = ({ caseItem, clientName, onUpdateTas
         importance: taskData.importance,
         assignee: taskData.assignee,
         image_url: taskData.image_url,
+        audio_url: taskData.audio_url,
       };
       onUpdateTasks([...tasks, newTask]);
 
@@ -90,6 +92,7 @@ const CaseTasks: React.FC<CaseTasksProps> = ({ caseItem, clientName, onUpdateTas
         location: taskData.location || "غير محدد",
         case_id: caseItem.id,
         image_url: taskData.image_url,
+        audio_url: taskData.audio_url,
       };
       set_admin_tasks((prev) => [...prev, globalTask]);
     }
@@ -128,32 +131,62 @@ const CaseTasks: React.FC<CaseTasksProps> = ({ caseItem, clientName, onUpdateTas
       {tasks.length === 0 ? (
         <p className="text-sm text-gray-500 text-center py-4">لا توجد مهام حالياً</p>
       ) : (
-        tasks.map(task => (
-          <div key={task.id} className={`flex flex-col gap-2 p-2 border-b last:border-none ${task.completed ? "opacity-50" : ""}`}>
-            <div className="flex items-center gap-2">
-              <button onClick={() => toggleTask(task.id)}>
-                <CheckCircleIcon className={`w-5 h-5 ${task.completed ? "text-green-500" : "text-gray-300"}`} />
-              </button>
-              <span className={`flex-grow ${task.completed ? "line-through text-gray-500" : ""}`}>{task.task}</span>
-              <button onClick={() => openEditModal(task)} className="p-1 hover:bg-gray-200 rounded">
-                <PencilIcon className="w-5 h-5 text-gray-500" />
-              </button>
-              <button onClick={() => deleteTask(task.id)}>
-                <TrashIcon className="w-5 h-5 text-red-500" />
-              </button>
-            </div>
-            {task.image_url && (
-              <div className="mr-7">
-                <img
-                  src={task.image_url}
-                  alt="صورة المهمة"
-                  onClick={() => setSelectedTaskImageUrl(task.image_url!)}
-                  className="w-20 h-20 object-cover rounded-lg border border-gray-200 cursor-pointer hover:opacity-90 hover:shadow-md transition-all"
-                />
+        tasks.map((task) => {
+          let taskAudio = task.audio_url;
+          let cleanTask = task.task || "";
+          if (!taskAudio && cleanTask.includes("<!--AUDIO:")) {
+            const matchAudio = cleanTask.match(/<!--AUDIO:([\s\S]*?)-->/);
+            if (matchAudio) taskAudio = matchAudio[1];
+          }
+          if (cleanTask.includes("<!--AUDIO:")) {
+            cleanTask = cleanTask.replace(/<!--AUDIO:[\s\S]*?-->/g, "").trim();
+          }
+          let taskImg = task.image_url;
+          if (!taskImg && cleanTask.includes("<!--IMG:")) {
+            const matchImg = cleanTask.match(/<!--IMG:([\s\S]*?)-->/);
+            if (matchImg) taskImg = matchImg[1];
+          }
+          if (cleanTask.includes("<!--IMG:")) {
+            cleanTask = cleanTask.replace(/<!--IMG:[\s\S]*?-->/g, "").trim();
+          }
+
+          return (
+            <div
+              key={task.id}
+              className={`flex flex-col gap-2 p-2 border-b last:border-none ${task.completed ? "opacity-50" : ""}`}
+            >
+              <div className="flex items-center gap-2">
+                <button onClick={() => toggleTask(task.id)}>
+                  <CheckCircleIcon className={`w-5 h-5 ${task.completed ? "text-green-500" : "text-gray-300"}`} />
+                </button>
+                <span className={`flex-grow ${task.completed ? "line-through text-gray-500" : ""}`}>
+                  {cleanTask}
+                </span>
+                <button onClick={() => openEditModal(task)} className="p-1 hover:bg-gray-200 rounded">
+                  <PencilIcon className="w-5 h-5 text-gray-500" />
+                </button>
+                <button onClick={() => deleteTask(task.id)}>
+                  <TrashIcon className="w-5 h-5 text-red-500" />
+                </button>
               </div>
-            )}
-          </div>
-        ))
+              {taskImg && (
+                <div className="mr-7">
+                  <img
+                    src={taskImg}
+                    alt="صورة المهمة"
+                    onClick={() => setSelectedTaskImageUrl(taskImg!)}
+                    className="w-20 h-20 object-cover rounded-lg border border-gray-200 cursor-pointer hover:opacity-90 hover:shadow-md transition-all"
+                  />
+                </div>
+              )}
+              {taskAudio && (
+                <div className="mr-7 max-w-sm">
+                  <AudioPlayer src={taskAudio} />
+                </div>
+              )}
+            </div>
+          );
+        })
       )}
       <AdminTaskModal
         isOpen={isModalOpen}

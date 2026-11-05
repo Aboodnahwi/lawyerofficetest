@@ -122,11 +122,11 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({
     } catch (err: any) {
       console.error("Microphone access error:", err);
       if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
-        setPermissionError("يرجى منح إذن الوصول إلى الميكروفون لتسجيل الملاحظة الصوتية.");
+        setPermissionError("تم رفض إذن الميكروفون. يرجى السماح بالوصول إلى الميكروفون من إعدادات المتصفح/الصفحة أو استخدام خيار 'رفع ملف صوتي' أدناه.");
       } else if (err.name === "NotFoundError" || err.name === "DevicesNotFoundError") {
-        setPermissionError("لم يتم العثور على ميكروفون متصل بالجهاز.");
+        setPermissionError("لم يتم العثور على ميكروفون متصل بالجهاز. يمكنك رفع ملف صوتي بدلاً من ذلك.");
       } else {
-        setPermissionError("تعذر بدء التسجيل الصوتي. يرجى التحقق من إعدادات الميكروفون.");
+        setPermissionError("تعذر بدء التسجيل الصوتي. يرجى التحقق من إعدادات الميكروفون أو استخدام خيار رفع ملف صوتي.");
       }
     }
   };

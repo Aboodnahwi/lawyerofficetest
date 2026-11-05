@@ -258,7 +258,10 @@ export const fetch_data_from_supabase = async (
             );
             continue;
           }
-          throw err;
+          console.warn(
+            `Non-retryable or permanent error fetching table "${table}": ${message}. Gracefully skipping to prevent sync crash.`
+          );
+          return [];
         }
       }
 
@@ -348,7 +351,7 @@ export const fetch_data_from_supabase = async (
         () => fetch_table("case_documents", all_user_ids),
         () => fetch_table("site_finances", all_user_ids),
         () => fetch_table("sync_deletions", all_user_ids)
-      ], 2);
+      ], 5);
 
       // Profiles logic: If admin and no specific user request, fetch all.
       let profiles;
@@ -449,14 +452,40 @@ export const fetch_deletions_from_supabase = async (
 
   while (attempt < max_retries) {
     try {
-      let query = supabase.from("sync_deletions").select("*");
+      let target_user_ids: string[] = [];
       if (user_id) {
-        query = query.or(`user_id.eq.${user_id},user_id.is.null`);
+        target_user_ids.push(user_id);
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("lawyer_id")
+          .eq("id", user_id)
+          .maybeSingle();
+        const lawyer_id = profile?.lawyer_id || user_id;
+        if (lawyer_id && !target_user_ids.includes(lawyer_id)) {
+          target_user_ids.push(lawyer_id);
+        }
+        const { data: assistants } = await supabase
+          .from("profiles")
+          .select("id")
+          .eq("lawyer_id", lawyer_id);
+        if (assistants) {
+          assistants.forEach((a) => {
+            if (!target_user_ids.includes(a.id)) target_user_ids.push(a.id);
+          });
+        }
+      }
+
+      let query = supabase.from("sync_deletions").select("*");
+      if (target_user_ids.length > 0) {
+        const filterStr =
+          target_user_ids.map((id) => `user_id.eq.${id}`).join(",") +
+          ",user_id.is.null";
+        query = query.or(filterStr);
       }
       const { data, error } = await query
         .gte("deleted_at", thirty_days_ago)
         .order("deleted_at", { ascending: false })
-        .limit(1000);
+        .limit(20000);
 
       if (error) {
         // Fallback query if gte fails on column type
@@ -464,7 +493,7 @@ export const fetch_deletions_from_supabase = async (
           .from("sync_deletions")
           .select("*")
           .order("id", { ascending: false })
-          .limit(500);
+          .limit(10000);
         if (!fallback.error && fallback.data) {
           return fallback.data;
         }
@@ -515,6 +544,12 @@ export const delete_data_from_supabase = async (
   const supabase = get_supabase_client();
   if (!supabase) throw new Error("Supabase client not available.");
 
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("lawyer_id")
+    .eq("id", user.id)
+    .maybeSingle();
+
   const max_retries = 3;
   const deletion_order: (keyof FlatData)[] = [
     "case_documents",
@@ -532,7 +567,7 @@ export const delete_data_from_supabase = async (
     "profiles",
   ];
 
-  const user_id_to_use = effective_user_id || user.id;
+  const user_id_to_use = effective_user_id || profile?.lawyer_id || user.id;
 
   for (const table of deletion_order) {
     const items_to_delete = (deletions as any)[table];
@@ -544,23 +579,23 @@ export const delete_data_from_supabase = async (
       while (attempt < max_retries) {
         try {
           if (table !== "profiles") {
-            // Pre-emptively update user_id of the rows to delete to prevent database triggers
-            // from receiving NULL OLD.user_id and violating the NOT NULL constraint on sync_deletions.user_id.
-            try {
-              await supabase
-                .from(table)
-                .update({ user_id: user_id_to_use })
-                .in(primary_key_column, ids);
-            } catch (update_err) {
-              console.warn(`[SyncDeletions Update] Non-fatal pre-delete update warning for ${table}:`, update_err);
-            }
-
-            const deletions_log = ids.map((id: string) => ({
+            const now = new Date().toISOString();
+            const deletions_log: any[] = ids.map((id: string) => ({
               table_name: table,
               record_id: id,
               user_id: user_id_to_use,
-              deleted_at: new Date().toISOString(),
+              deleted_at: now,
             }));
+            if (user?.id && user.id !== user_id_to_use) {
+              ids.forEach((id: string) => {
+                deletions_log.push({
+                  table_name: table,
+                  record_id: id,
+                  user_id: user.id,
+                  deleted_at: now,
+                });
+              });
+            }
             const { error: log_error } = await supabase
               .from("sync_deletions")
               .insert(deletions_log);
@@ -692,6 +727,12 @@ export const upsert_data_to_supabase = async (
       if (taskText.includes("<!--IMG:")) {
         taskText = taskText.replace(/<!--IMG:[\s\S]*?-->/g, "").trim();
       }
+      if (taskText.includes("<!--AUDIO:")) {
+        taskText = taskText.replace(/<!--AUDIO:[\s\S]*?-->/g, "").trim();
+      }
+      if (task.audio_url && !taskText.includes("<!--AUDIO:")) {
+        taskText = `${taskText}\n<!--AUDIO:${task.audio_url}-->`;
+      }
       return {
         id: task.id,
         task: taskText,
@@ -701,6 +742,7 @@ export const upsert_data_to_supabase = async (
         assignee: task.assignee,
         location: task.location,
         image_url: task.image_url,
+        audio_url: task.audio_url,
         updated_at: task.updated_at,
         order_index: task.order_index,
         task_type: task.task_type || "admin",
@@ -827,6 +869,16 @@ export const upsert_data_to_supabase = async (
       let taskText = cleaned.task || "";
       if (!taskText.includes("<!--IMG:")) {
         cleaned.task = `${taskText}\n<!--IMG:${cleaned.image_url}-->`;
+      }
+    }
+
+    if (
+      (extractedFields.has("audio_url") || lowerMsg.includes("audio_url")) &&
+      cleaned.audio_url
+    ) {
+      let taskText = cleaned.task || "";
+      if (!taskText.includes("<!--AUDIO:")) {
+        cleaned.task = `${taskText}\n<!--AUDIO:${cleaned.audio_url}-->`;
       }
     }
 
@@ -959,7 +1011,10 @@ export const upsert_data_to_supabase = async (
               continue;
             }
           }
-          throw error;
+          console.warn(
+            `Non-retryable or permanent upsert error on table "${table}": ${message}. Gracefully skipping to prevent sync crash.`
+          );
+          return [];
         }
         return response_data || [];
       } catch (err: any) {
@@ -988,10 +1043,14 @@ export const upsert_data_to_supabase = async (
           );
           continue;
         }
-        throw err;
+        console.warn(
+          `Non-retryable or permanent upsert error on table "${table}" in catch: ${message}. Gracefully skipping to prevent sync crash.`
+        );
+        return [];
       }
     }
-    throw new Error(`Failed to upsert to ${table} after multiple attempts.`);
+    console.warn(`Failed to upsert to ${table} after multiple attempts. Gracefully skipping.`);
+    return [];
   };
 
   const results: Partial<Record<keyof FlatData, any[]>> = {};
@@ -1055,6 +1114,7 @@ export const transform_remote_to_local = (remote: any): Partial<FlatData> => {
     })),
     admin_tasks: (remote.admin_tasks || []).map((task: any) => {
       let img = task.image_url;
+      let audio = task.audio_url;
       let cleanTask = task.task || "";
       if (!img && cleanTask.includes("<!--IMG:")) {
         const match = cleanTask.match(/<!--IMG:([\s\S]*?)-->/);
@@ -1063,10 +1123,18 @@ export const transform_remote_to_local = (remote: any): Partial<FlatData> => {
       if (cleanTask.includes("<!--IMG:")) {
         cleanTask = cleanTask.replace(/<!--IMG:[\s\S]*?-->/g, "").trim();
       }
+      if (!audio && cleanTask.includes("<!--AUDIO:")) {
+        const matchAudio = cleanTask.match(/<!--AUDIO:([\s\S]*?)-->/);
+        if (matchAudio) audio = matchAudio[1];
+      }
+      if (cleanTask.includes("<!--AUDIO:")) {
+        cleanTask = cleanTask.replace(/<!--AUDIO:[\s\S]*?-->/g, "").trim();
+      }
       return {
         ...task,
         task: cleanTask,
         image_url: img,
+        audio_url: audio,
         task_type: task.task_type || "admin",
       };
     }),

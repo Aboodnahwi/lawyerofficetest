@@ -90,6 +90,7 @@ const construct_data = (flat_data: Partial<FlatData>): AppData => {
         importance: t.importance || "normal",
         assignee: t.assignee,
         image_url: t.image_url,
+        audio_url: t.audio_url,
         updated_at: t.updated_at,
       }));
 
@@ -100,7 +101,12 @@ const construct_data = (flat_data: Partial<FlatData>): AppData => {
       task_map.set(
         t.id,
         existing
-          ? { ...existing, ...t, image_url: t.image_url || existing.image_url }
+          ? {
+              ...existing,
+              ...t,
+              image_url: t.image_url || existing.image_url,
+              audio_url: t.audio_url || existing.audio_url,
+            }
           : t,
       );
     });
@@ -150,6 +156,8 @@ const construct_data = (flat_data: Partial<FlatData>): AppData => {
     profiles: (flat_data.profiles || []) as any,
     site_finances: (flat_data.site_finances || []) as any,
     audit_logs: (flat_data.audit_logs || []) as any,
+    voice_tasks: (flat_data as any).voice_tasks || [],
+    voice_task_recipients: (flat_data as any).voice_task_recipients || [],
   };
 };
 
@@ -179,6 +187,7 @@ const merge_for_refresh = <T extends { id: any; updated_at?: Date | string }>(
   key?: string,
   last_synced_time?: number,
   local_deleted_ids?: Set<string>,
+  remote_deletion_ids?: Set<string>,
 ): T[] => {
   const final_items = new Map<any, T>();
   const remote_map = new Map<any, T>();
@@ -193,6 +202,9 @@ const merge_for_refresh = <T extends { id: any; updated_at?: Date | string }>(
     const id = local_item.id ?? (local_item as any).name;
 
     if (local_deleted_ids && local_deleted_ids.has(id)) {
+      continue;
+    }
+    if (remote_deletion_ids && remote_deletion_ids.has(id)) {
       continue;
     }
 
@@ -232,10 +244,19 @@ const merge_for_refresh = <T extends { id: any; updated_at?: Date | string }>(
         final_items.set(id, merged);
       }
     } else {
-      // Local item is NOT in remote, and not marked as deleted.
-      // This is a new local item that hasn't been synced yet, or a locally updated item.
-      // We rely on sync_deletions for actual remote deletions.
-      final_items.set(id, local_item);
+      // Local item is NOT in remote
+      const local_date = safe_revive_date(
+        local_item.updated_at || 0,
+      ).getTime();
+      const is_remotely_deleted =
+        (remote_deletion_ids && remote_deletion_ids.has(id)) ||
+        ((last_synced_time || 0) > 0 &&
+          local_date > 0 &&
+          local_date < (last_synced_time || 0) - 5000);
+
+      if (!is_remotely_deleted) {
+        final_items.set(id, local_item);
+      }
     }
   }
 
@@ -244,6 +265,9 @@ const merge_for_refresh = <T extends { id: any; updated_at?: Date | string }>(
     const id = remote_item.id ?? (remote_item as any).name;
     if (!final_items.has(id)) {
       if (local_deleted_ids && local_deleted_ids.has(id)) {
+        continue;
+      }
+      if (remote_deletion_ids && remote_deletion_ids.has(id)) {
         continue;
       }
       const merged = { ...remote_item };
@@ -263,9 +287,21 @@ const apply_deletions_to_local = (
 ): FlatData => {
   if (!deletions || deletions.length === 0) return local_flat_data;
 
-  const deletion_map = new Map<string, string>(); // RecordID -> DeletedAt ISO
+  const deletion_map = new Map<string, string>(); // RecordID / Key -> DeletedAt ISO
+  const deletion_ids_set = new Set<string>();
+
   deletions.forEach((d) => {
-    deletion_map.set(`${d.table_name}:${d.record_id}`, d.deleted_at);
+    if (d.record_id) {
+      deletion_ids_set.add(d.record_id);
+      deletion_map.set(d.record_id, d.deleted_at);
+      if (d.table_name) {
+        deletion_map.set(`${d.table_name}:${d.record_id}`, d.deleted_at);
+        const singular = d.table_name.endsWith("s")
+          ? d.table_name.slice(0, -1)
+          : d.table_name;
+        deletion_map.set(`${singular}:${d.record_id}`, d.deleted_at);
+      }
+    }
   });
 
   const filter_items = (items: any[], table_name: string) => {
@@ -273,14 +309,12 @@ const apply_deletions_to_local = (
       const id = item.id ?? item.name;
       const key = `${table_name}:${id}`;
 
-      if (deletion_map.has(key)) {
-        const deleted_at_str = deletion_map.get(key);
-        if (!deleted_at_str) return false;
-        const deleted_at = safe_revive_date(deleted_at_str).getTime();
-        const updated_at = safe_revive_date(item.updated_at || 0).getTime();
-        if (updated_at <= deleted_at + 2000 || !item.updated_at) {
-          return false;
-        }
+      if (
+        deletion_ids_set.has(id) ||
+        deletion_map.has(key) ||
+        deletion_map.has(id)
+      ) {
+        return false;
       }
       return true;
     });
@@ -682,7 +716,11 @@ export const use_sync = ({
         ]);
         
         log("info", "تم جلب البيانات، جاري الدمج والمزامنة المحلية...");
-        const remote_flat_data = transform_remote_to_local(remote_data_raw);
+        let remote_flat_data = transform_remote_to_local(remote_data_raw) as FlatData;
+        remote_flat_data = apply_deletions_to_local(
+          remote_flat_data,
+          remote_deletions,
+        );
 
         // 1.5 Cloud Cleanup (72h Rule)
         const supabase = get_supabase_client();
@@ -737,22 +775,95 @@ export const use_sync = ({
         const merged_flat_data: Partial<FlatData> = {};
         let total_upserts = 0;
 
+        const remote_deletion_ids_set = new Set<string>();
+        const remote_deletions_by_table: Record<string, Set<string>> = {
+          clients: new Set(),
+          cases: new Set(),
+          stages: new Set(),
+          sessions: new Set(),
+          admin_tasks: new Set(),
+          appointments: new Set(),
+          accounting_entries: new Set(),
+          invoices: new Set(),
+          invoice_items: new Set(),
+          assistants: new Set(),
+          case_documents: new Set(),
+          documents: new Set(),
+          profiles: new Set(),
+          site_finances: new Set(),
+        };
+
+        (remote_deletions || []).forEach((d) => {
+          if (d.record_id) {
+            remote_deletion_ids_set.add(d.record_id);
+            const tbl = d.table_name || "";
+            if (remote_deletions_by_table[tbl]) {
+              remote_deletions_by_table[tbl].add(d.record_id);
+            }
+            if (tbl === "case_documents" || tbl === "documents") {
+              remote_deletions_by_table.documents.add(d.record_id);
+              remote_deletions_by_table.case_documents.add(d.record_id);
+            }
+          }
+        });
+
         const deleted_ids_sets = {
-          clients: new Set(deleted_ids_ref.current.clients),
-          cases: new Set(deleted_ids_ref.current.cases),
-          stages: new Set(deleted_ids_ref.current.stages),
-          sessions: new Set(deleted_ids_ref.current.sessions),
-          admin_tasks: new Set(deleted_ids_ref.current.admin_tasks),
-          appointments: new Set(deleted_ids_ref.current.appointments),
-          accounting_entries: new Set(
-            deleted_ids_ref.current.accounting_entries,
-          ),
-          invoices: new Set(deleted_ids_ref.current.invoices),
-          invoice_items: new Set(deleted_ids_ref.current.invoice_items),
-          assistants: new Set(deleted_ids_ref.current.assistants),
-          documents: new Set(deleted_ids_ref.current.documents),
-          profiles: new Set(deleted_ids_ref.current.profiles),
-          site_finances: new Set(deleted_ids_ref.current.site_finances),
+          clients: new Set([
+            ...deleted_ids_ref.current.clients,
+            ...remote_deletions_by_table.clients,
+          ]),
+          cases: new Set([
+            ...deleted_ids_ref.current.cases,
+            ...remote_deletions_by_table.cases,
+          ]),
+          stages: new Set([
+            ...deleted_ids_ref.current.stages,
+            ...remote_deletions_by_table.stages,
+          ]),
+          sessions: new Set([
+            ...deleted_ids_ref.current.sessions,
+            ...remote_deletions_by_table.sessions,
+          ]),
+          admin_tasks: new Set([
+            ...deleted_ids_ref.current.admin_tasks,
+            ...remote_deletions_by_table.admin_tasks,
+          ]),
+          appointments: new Set([
+            ...deleted_ids_ref.current.appointments,
+            ...remote_deletions_by_table.appointments,
+          ]),
+          accounting_entries: new Set([
+            ...deleted_ids_ref.current.accounting_entries,
+            ...remote_deletions_by_table.accounting_entries,
+          ]),
+          invoices: new Set([
+            ...deleted_ids_ref.current.invoices,
+            ...remote_deletions_by_table.invoices,
+          ]),
+          invoice_items: new Set([
+            ...deleted_ids_ref.current.invoice_items,
+            ...remote_deletions_by_table.invoice_items,
+          ]),
+          assistants: new Set([
+            ...deleted_ids_ref.current.assistants,
+            ...remote_deletions_by_table.assistants,
+          ]),
+          documents: new Set([
+            ...deleted_ids_ref.current.documents,
+            ...remote_deletions_by_table.documents,
+          ]),
+          case_documents: new Set([
+            ...deleted_ids_ref.current.documents,
+            ...remote_deletions_by_table.case_documents,
+          ]),
+          profiles: new Set([
+            ...deleted_ids_ref.current.profiles,
+            ...remote_deletions_by_table.profiles,
+          ]),
+          site_finances: new Set([
+            ...deleted_ids_ref.current.site_finances,
+            ...remote_deletions_by_table.site_finances,
+          ]),
         };
 
         for (const key of Object.keys(local_flat_data) as (keyof FlatData)[]) {
@@ -855,20 +966,29 @@ export const use_sync = ({
                 (deleted_ids_sets as any)[key]?.has(id) ||
                 (deleted_ids_sets as any)[
                   key === "case_documents" ? "documents" : key
-                ]?.has(id);
+                ]?.has(id) ||
+                remote_deletion_ids_set.has(id);
 
-              // We rely on the sync_deletions table to track actual remote deletions.
-              // Timestamp heuristics are dangerous because newly created offline items might 
-              // have timestamps close to the last sync time and get falsely flagged and dropped.
-              const is_remotely_deleted = false;
+              const storedLastSync = getStoredLastSyncTime(current_user.id);
+
+              // An item is remotely deleted if:
+              // 1. It is explicitly listed in sync_deletions (remote_deletion_ids_set)
+              // 2. OR this device has previously synced (storedLastSync > 0), and this item was updated
+              //    before that last sync (local_date < storedLastSync - 5000), but is now missing from remote_map.
+              //    This means it was deleted on the cloud or by another device, so it must not be resurrected.
+              const is_remotely_deleted =
+                remote_deletion_ids_set.has(id) ||
+                (storedLastSync > 0 &&
+                  local_date > 0 &&
+                  local_date < storedLastSync - 5000);
 
               if (!is_deleted && !is_remotely_deleted) {
-                // Genuinely new local offline item
+                // Genuinely new local offline item created after the last sync
                 items_to_upsert.push(local_item);
                 final_merged_items.set(id, local_item);
               } else {
                 console.log(
-                  `[Sync] Skipping upload of deleted item in ${key}: ${id} (remotely_deleted=${is_remotely_deleted})`,
+                  `[Sync] Skipping upload and purging deleted item in ${key}: ${id} (is_deleted=${is_deleted}, is_remotely_deleted=${is_remotely_deleted})`,
                 );
               }
             }
@@ -880,6 +1000,7 @@ export const use_sync = ({
               let is_deleted = false;
               const deleted_set = (deleted_ids_sets as any)[key];
               if (deleted_set) is_deleted = deleted_set.has(id);
+              if (remote_deletion_ids_set.has(id)) is_deleted = true;
               if (
                 key === "case_documents" &&
                 excluded_doc_ids_ref.current &&
@@ -1136,8 +1257,12 @@ export const use_sync = ({
           ),
         ]);
 
-        const remote_flat_data_untyped =
-          transform_remote_to_local(remote_data_raw);
+        let remote_flat_data_untyped =
+          transform_remote_to_local(remote_data_raw) as FlatData;
+        remote_flat_data_untyped = apply_deletions_to_local(
+          remote_flat_data_untyped,
+          remote_deletions,
+        );
 
         const deleted_ids_sets = {
           clients: new Set(deleted_ids_ref.current.clients),
@@ -1178,10 +1303,22 @@ export const use_sync = ({
         );
         await cleanup_local_files(remote_deletions);
 
+        const remote_deletion_ids_set = new Set<string>();
+        (remote_deletions || []).forEach((d) => {
+          if (d.record_id) remote_deletion_ids_set.add(d.record_id);
+        });
+
         const merged_flat_data: Partial<FlatData> = {};
         const storedLastSync = getStoredLastSyncTime(current_user.id);
 
-        for (const key of Object.keys(remote_flat_data) as (keyof FlatData)[]) {
+        const all_keys = Array.from(
+          new Set([
+            ...Object.keys(local_flat_data),
+            ...Object.keys(remote_flat_data),
+          ]),
+        ) as (keyof FlatData)[];
+
+        for (const key of all_keys) {
           const remote_items = (remote_flat_data as any)[key] || [];
           const local_items = (local_flat_data as any)[key] || [];
 
@@ -1191,6 +1328,7 @@ export const use_sync = ({
             key,
             storedLastSync,
             (deleted_ids_sets as any)[key],
+            remote_deletion_ids_set,
           );
           (merged_flat_data as any)[key] = merged_items;
         }

@@ -969,7 +969,7 @@ const App: React.FC<{ onRefresh: () => void }> = ({ onRefresh }) => {
           {currentPage === "accounting" && (
             <AccountingPage clear_initial_invoice_data={() => {}} />
           )}
-          {currentPage === "settings" && <SettingsPage onNavigate={(page) => setCurrentPage(page as Page)} />}
+          {currentPage === "settings" && <SettingsPage onNavigate={(page) => setCurrentPage(page as Page)} onLogout={handleLogout} />}
           {currentPage === "logs" && <ActivityLogsPage />}
           {currentPage === "admin-tasks" && (
             <HomePage
@@ -1031,6 +1031,25 @@ const App: React.FC<{ onRefresh: () => void }> = ({ onRefresh }) => {
                 ...prev,
                 newTaskObj,
               ]);
+
+              if ((taskData as any).is_voice_task && (taskData as any).audio_url) {
+                try {
+                  const recipientIds = data.profiles ? data.profiles.map((p: any) => p.id) : [];
+                  fetch((taskData as any).audio_url)
+                    .then((r) => r.blob())
+                    .then((blob) => {
+                      if (data.addVoiceTask) {
+                        data.addVoiceTask(blob, taskData.task || "مهمة صوتية", recipientIds).catch((err: any) => {
+                          console.warn("Notice: Cloud voice task upload:", err);
+                        });
+                      }
+                    })
+                    .catch((e) => console.warn("Notice: Audio blob conversion:", e));
+                } catch (e) {
+                  console.warn("Notice: Audio dispatch:", e);
+                }
+              }
+
               if ((taskData as any).case_id) {
                 data.set_clients((prev: any[]) =>
                   prev.map((client) => ({

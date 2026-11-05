@@ -259,7 +259,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- Generic Policy: Users can see their own data OR data belonging to their lawyer
+-- Generic Policy: Users can access their office data
 -- We apply this to all data tables with explicit INSERT/UPDATE support
 DO $$ 
 DECLARE 
@@ -269,8 +269,20 @@ BEGIN
     FOREACH t IN ARRAY tables LOOP
         EXECUTE format('DROP POLICY IF EXISTS "Users can access their office data" ON public.%I', t);
         EXECUTE format('CREATE POLICY "Users can access their office data" ON public.%I 
-                        FOR ALL USING (public.is_admin() OR user_id = public.get_effective_owner_id())
-                        WITH CHECK (public.is_admin() OR user_id = public.get_effective_owner_id())', t);
+                        FOR ALL USING (
+                            public.is_admin() OR 
+                            user_id = auth.uid() OR 
+                            user_id = public.get_effective_owner_id() OR 
+                            user_id IN (SELECT id FROM public.profiles WHERE lawyer_id = public.get_effective_owner_id() OR lawyer_id = auth.uid()) OR
+                            auth.uid() IN (SELECT lawyer_id FROM public.profiles WHERE id = user_id)
+                        )
+                        WITH CHECK (
+                            public.is_admin() OR 
+                            user_id = auth.uid() OR 
+                            user_id = public.get_effective_owner_id() OR 
+                            user_id IN (SELECT id FROM public.profiles WHERE lawyer_id = public.get_effective_owner_id() OR lawyer_id = auth.uid()) OR
+                            auth.uid() IN (SELECT lawyer_id FROM public.profiles WHERE id = user_id)
+                        )', t);
     END LOOP;
 END $$;
 
@@ -300,9 +312,18 @@ CREATE POLICY "Admins can manage site finances" ON public.site_finances
 
 CREATE OR REPLACE FUNCTION public.log_sync_deletion()
 RETURNS TRIGGER AS $$
+DECLARE
+    target_user_id UUID;
 BEGIN
-    INSERT INTO public.sync_deletions (table_name, record_id, user_id)
-    VALUES (TG_TABLE_NAME, OLD.id::text, OLD.user_id);
+    target_user_id := COALESCE(OLD.user_id, auth.uid());
+    IF target_user_id IS NOT NULL THEN
+        INSERT INTO public.sync_deletions (table_name, record_id, user_id)
+        VALUES (TG_TABLE_NAME, OLD.id::text, target_user_id)
+        ON CONFLICT DO NOTHING;
+    END IF;
+    RETURN OLD;
+EXCEPTION WHEN OTHERS THEN
+    -- Ensure deletions never fail due to background logging issues
     RETURN OLD;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
@@ -343,3 +364,54 @@ DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
 CREATE TRIGGER on_auth_user_created
     AFTER INSERT ON auth.users
     FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+
+-- ==========================================
+-- Voice Tasks Tables (New Feature)
+-- ==========================================
+
+CREATE TABLE IF NOT EXISTS public.voice_tasks (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    sender_id UUID REFERENCES auth.users NOT NULL,
+    title TEXT,
+    storage_path TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS public.voice_task_recipients (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    voice_task_id UUID REFERENCES public.voice_tasks(id) ON DELETE CASCADE,
+    recipient_id UUID REFERENCES auth.users NOT NULL,
+    downloaded BOOLEAN DEFAULT FALSE,
+    downloaded_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- RLS Policies
+ALTER TABLE public.voice_tasks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.voice_task_recipients ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can access voice tasks they sent or received" ON public.voice_tasks
+    FOR SELECT USING (
+        sender_id = auth.uid() OR
+        id IN (SELECT voice_task_id FROM public.voice_task_recipients WHERE recipient_id = auth.uid())
+    );
+
+CREATE POLICY "Users can create voice tasks" ON public.voice_tasks
+    FOR INSERT WITH CHECK (sender_id = auth.uid());
+
+CREATE POLICY "Recipients can view their voice task statuses" ON public.voice_task_recipients
+    FOR SELECT USING (recipient_id = auth.uid());
+
+CREATE POLICY "Users can update their own receipt status" ON public.voice_task_recipients
+    FOR UPDATE USING (recipient_id = auth.uid());
+
+-- Cleanup function (Scheduled job can call this)
+CREATE OR REPLACE FUNCTION public.cleanup_expired_voice_tasks()
+RETURNS void AS $$
+BEGIN
+    -- Delete voice tasks where it's > 48h old
+    DELETE FROM public.voice_tasks
+    WHERE created_at < NOW() - INTERVAL '48 hours';
+    -- Recipients will be cascaded deleted
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;

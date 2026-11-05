@@ -28,7 +28,9 @@ import {
   HomeIcon,
   ListBulletIcon,
   ViewColumnsIcon,
+  MicrophoneIcon,
 } from "../components/icons";
+import AudioPlayer from "../components/AudioPlayer";
 import SessionsTable from "../components/SessionsTable";
 import PrintableReport from "../components/PrintableReport";
 import { printElement } from "../utils/printUtils";
@@ -1208,89 +1210,122 @@ const HomePage: React.FC<HomePageProps> = ({
     }
   };
 
-  const render_task_item = (task: AdminTask, location: string) => (
-    <div
-      key={task.id}
-      draggable={active_task_tab === "pending" || active_task_tab === "office_pending"}
-      onDragStart={(e) => handle_drag_start(e, "task", task.id)}
-      onDragEnd={handle_drag_end}
-      onDragOver={(e) => {
-        if (
-          (active_task_tab !== "pending" && active_task_tab !== "office_pending") ||
-          !dragged_task_id.current ||
-          dragged_task_id.current === task.id
-        )
-          return;
-        e.preventDefault();
-        set_drag_over_task_id(task.id);
-        const rect = e.currentTarget.getBoundingClientRect();
-        const midpoint = rect.top + rect.height / 2;
-        set_drop_position(e.clientY < midpoint ? "before" : "after");
-      }}
-      onDragLeave={() => {
-        set_drag_over_task_id(null);
-        set_drop_position(null);
-      }}
-      onDrop={(e) => {
-        if ((active_task_tab !== "pending" && active_task_tab !== "office_pending") || !drop_position) return;
-        e.preventDefault();
-        e.stopPropagation();
-        handle_task_drop(task.id, location, drop_position);
-        set_drag_over_task_id(null);
-        set_drop_position(null);
-      }}
-      onContextMenu={(e) => handle_admin_task_context_menu(e, task)}
-      onTouchStart={(e) => handle_admin_task_touch_start(e, task)}
-      onTouchEnd={handle_admin_task_touch_end}
-      onTouchMove={handle_admin_task_touch_end}
-      className={`relative p-3 border rounded-lg transition-all duration-150 ${dragged_task_id.current === task.id ? "opacity-40 scale-95" : "opacity-100 scale-100"} ${task.completed ? "bg-green-50/70 border-green-200" : "bg-white border-gray-200 hover:bg-gray-50 hover:shadow-sm"} ${active_task_tab === "pending" || active_task_tab === "office_pending" ? "cursor-move" : ""}`}
-    >
-      {" "}
-      {drag_over_task_id === task.id && drop_position === "before" && (
-        <div className="absolute top-0 left-0 right-0 h-1 bg-blue-500 rounded-full z-10"></div>
-      )}{" "}
-      <div className="flex items-start gap-3">
-        {" "}
-        <div className="flex-shrink-0 pt-1">
-          {" "}
-          <input
-            type="checkbox"
-            checked={task.completed}
-            onChange={() => handle_toggle_task_complete(task.id)}
-            className="w-5 h-5 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500"
-          />{" "}
-        </div>{" "}
-        <div className="flex-grow min-w-0">
-          {" "}
-          <p
-            className={`font-medium text-base whitespace-pre-wrap ${task.completed ? "line-through text-gray-500" : "text-gray-900"}`}
-          >
-            {task.task}
-          </p>{" "}
-          {task.case_id && (
-            <div className="text-xs text-blue-800 bg-blue-100 rounded-full px-2 py-0.5 mt-1 flex items-center gap-1 w-fit font-medium">
-              <ScaleIcon className="w-3 h-3" />
-              <span>
-                القضية:{" "}
-                {clients
-                  .flatMap((c) => c.cases)
-                  .find((cs) => cs.id === task.case_id)?.subject || "غير معروف"}
-              </span>
+  const render_task_item = (task: AdminTask, location: string) => {
+    let taskAudio = task.audio_url;
+    let cleanTaskText = task.task || "";
+    if (!taskAudio && cleanTaskText.includes("<!--AUDIO:")) {
+      const matchAudio = cleanTaskText.match(/<!--AUDIO:([\s\S]*?)-->/);
+      if (matchAudio) taskAudio = matchAudio[1];
+    }
+    if (cleanTaskText.includes("<!--AUDIO:")) {
+      cleanTaskText = cleanTaskText.replace(/<!--AUDIO:[\s\S]*?-->/g, "").trim();
+    }
+    let taskImg = task.image_url;
+    if (!taskImg && cleanTaskText.includes("<!--IMG:")) {
+      const matchImg = cleanTaskText.match(/<!--IMG:([\s\S]*?)-->/);
+      if (matchImg) taskImg = matchImg[1];
+    }
+    if (cleanTaskText.includes("<!--IMG:")) {
+      cleanTaskText = cleanTaskText.replace(/<!--IMG:[\s\S]*?-->/g, "").trim();
+    }
+
+    return (
+      <div
+        key={task.id}
+        draggable={active_task_tab === "pending" || active_task_tab === "office_pending"}
+        onDragStart={(e) => handle_drag_start(e, "task", task.id)}
+        onDragEnd={handle_drag_end}
+        onDragOver={(e) => {
+          if (
+            (active_task_tab !== "pending" && active_task_tab !== "office_pending") ||
+            !dragged_task_id.current ||
+            dragged_task_id.current === task.id
+          )
+            return;
+          e.preventDefault();
+          set_drag_over_task_id(task.id);
+          const rect = e.currentTarget.getBoundingClientRect();
+          const midpoint = rect.top + rect.height / 2;
+          set_drop_position(e.clientY < midpoint ? "before" : "after");
+        }}
+        onDragLeave={() => {
+          set_drag_over_task_id(null);
+          set_drop_position(null);
+        }}
+        onDrop={(e) => {
+          if ((active_task_tab !== "pending" && active_task_tab !== "office_pending") || !drop_position) return;
+          e.preventDefault();
+          e.stopPropagation();
+          handle_task_drop(task.id, location, drop_position);
+          set_drag_over_task_id(null);
+          set_drop_position(null);
+        }}
+        onContextMenu={(e) => handle_admin_task_context_menu(e, task)}
+        onTouchStart={(e) => handle_admin_task_touch_start(e, task)}
+        onTouchEnd={handle_admin_task_touch_end}
+        onTouchMove={handle_admin_task_touch_end}
+        className={`relative p-3 border rounded-lg transition-all duration-150 ${dragged_task_id.current === task.id ? "opacity-40 scale-95" : "opacity-100 scale-100"} ${task.completed ? "bg-green-50/70 border-green-200" : "bg-white border-gray-200 hover:bg-gray-50 hover:shadow-sm"} ${active_task_tab === "pending" || active_task_tab === "office_pending" ? "cursor-move" : ""}`}
+      >
+        {drag_over_task_id === task.id && drop_position === "before" && (
+          <div className="absolute top-0 left-0 right-0 h-1 bg-blue-500 rounded-full z-10"></div>
+        )}
+        <div className="flex items-start gap-3">
+          <div className="flex-shrink-0 pt-1">
+            <input
+              type="checkbox"
+              checked={task.completed}
+              onChange={() => handle_toggle_task_complete(task.id)}
+              className="w-5 h-5 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 cursor-pointer"
+            />
+          </div>
+          <div className="flex-grow min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <p
+                className={`font-medium text-base whitespace-pre-wrap ${task.completed ? "line-through text-gray-500" : "text-gray-900"}`}
+              >
+                {cleanTaskText}
+              </p>
+              {taskAudio && (
+                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                  <MicrophoneIcon className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>مهمة صوتية</span>
+                </span>
+              )}
             </div>
-          )}
-          {task.image_url && (
-            <div className="mt-2">
-              <img
-                src={task.image_url}
-                alt="صورة المهمة"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  set_selected_task_image_url(task.image_url!);
-                }}
-                className="w-24 h-24 sm:w-32 sm:h-32 object-cover rounded-lg border border-gray-200 cursor-pointer hover:opacity-90 hover:shadow-md transition-all"
-              />
-            </div>
-          )}
+            {task.case_id && (
+              <div className="text-xs text-blue-800 bg-blue-100 rounded-full px-2 py-0.5 mt-1 flex items-center gap-1 w-fit font-medium">
+                <ScaleIcon className="w-3 h-3" />
+                <span>
+                  القضية:{" "}
+                  {clients
+                    .flatMap((c) => c.cases)
+                    .find((cs) => cs.id === task.case_id)?.subject || "غير معروف"}
+                </span>
+              </div>
+            )}
+            {taskImg && (
+              <div className="mt-2">
+                <img
+                  src={taskImg}
+                  alt="صورة المهمة"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    set_selected_task_image_url(taskImg!);
+                  }}
+                  className="w-24 h-24 sm:w-32 sm:h-32 object-cover rounded-lg border border-gray-200 cursor-pointer hover:opacity-90 hover:shadow-md transition-all"
+                />
+              </div>
+            )}
+            {taskAudio && (
+              <div
+                className="mt-2.5 max-w-md w-full"
+                onClick={(e) => e.stopPropagation()}
+                onMouseDown={(e) => e.stopPropagation()}
+                onTouchStart={(e) => e.stopPropagation()}
+              >
+                <AudioPlayer src={taskAudio} />
+              </div>
+            )}
           <div className="mt-2 flex items-center gap-x-4 gap-y-2 text-sm text-gray-600">
             {" "}
             <div
@@ -1384,6 +1419,7 @@ const HomePage: React.FC<HomePageProps> = ({
       )}{" "}
     </div>
   );
+};
 
   return (
     <div className="space-y-6">

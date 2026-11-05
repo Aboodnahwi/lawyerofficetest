@@ -27,7 +27,7 @@ import {
   SyncStatus as SyncStatusType,
   SyncLogEntry,
 } from "./useSync";
-import { get_supabase_client } from "../supabaseClient";
+import { get_supabase_client, get_service_supabase_client } from "../supabaseClient";
 import {
   is_before_today,
   to_input_date_string,
@@ -45,7 +45,7 @@ import {
 } from "../utils/db";
 
 export const APP_DATA_KEY_PREFIX = "lawyerBusinessManagementData";
-export const APP_VERSION = "30-04-2026";
+export const APP_VERSION = "3-11-2026";
 export const get_app_data_key = (user_id: string | null) =>
   user_id ? `${APP_DATA_KEY_PREFIX}_${user_id}` : APP_DATA_KEY_PREFIX;
 
@@ -63,6 +63,8 @@ const get_initial_data = (): AppData => ({
   profiles: [],
   site_finances: [],
   audit_logs: [],
+  voice_tasks: [],
+  voice_task_recipients: [],
 });
 
 const migrate_data = (old_data: any): AppData => {
@@ -109,6 +111,7 @@ const migrate_data = (old_data: any): AppData => {
     stages: (c.stages || []).map(migrate_stage),
     tasks: (c.tasks || []).map((t: any) => {
       let img = t.image_url || t.imageUrl;
+      let audio = t.audio_url || t.audioUrl;
       let cleanTask = t.task || "";
       if (!img && cleanTask.includes("<!--IMG:")) {
         const match = cleanTask.match(/<!--IMG:([\s\S]*?)-->/);
@@ -116,6 +119,13 @@ const migrate_data = (old_data: any): AppData => {
       }
       if (cleanTask.includes("<!--IMG:")) {
         cleanTask = cleanTask.replace(/<!--IMG:[\s\S]*?-->/g, "").trim();
+      }
+      if (!audio && cleanTask.includes("<!--AUDIO:")) {
+        const matchAudio = cleanTask.match(/<!--AUDIO:([\s\S]*?)-->/);
+        if (matchAudio) audio = matchAudio[1];
+      }
+      if (cleanTask.includes("<!--AUDIO:")) {
+        cleanTask = cleanTask.replace(/<!--AUDIO:[\s\S]*?-->/g, "").trim();
       }
       return {
         id: t.id,
@@ -125,6 +135,7 @@ const migrate_data = (old_data: any): AppData => {
         importance: t.importance || "normal",
         assignee: t.assignee,
         image_url: img,
+        audio_url: audio,
         updated_at: t.updated_at || t.updatedAt,
       };
     }),
@@ -146,6 +157,7 @@ const migrate_data = (old_data: any): AppData => {
 
   const migrate_task = (t: any): AdminTask => {
     let img = t.image_url || t.imageUrl;
+    let audio = t.audio_url || t.audioUrl;
     let cleanTask = t.task || "";
     if (!img && cleanTask.includes("<!--IMG:")) {
       const match = cleanTask.match(/<!--IMG:([\s\S]*?)-->/);
@@ -153,6 +165,13 @@ const migrate_data = (old_data: any): AppData => {
     }
     if (cleanTask.includes("<!--IMG:")) {
       cleanTask = cleanTask.replace(/<!--IMG:[\s\S]*?-->/g, "").trim();
+    }
+    if (!audio && cleanTask.includes("<!--AUDIO:")) {
+      const matchAudio = cleanTask.match(/<!--AUDIO:([\s\S]*?)-->/);
+      if (matchAudio) audio = matchAudio[1];
+    }
+    if (cleanTask.includes("<!--AUDIO:")) {
+      cleanTask = cleanTask.replace(/<!--AUDIO:[\s\S]*?-->/g, "").trim();
     }
     return {
       id: t.id,
@@ -164,6 +183,7 @@ const migrate_data = (old_data: any): AppData => {
       assignee: t.assignee,
       location: t.location,
       image_url: img,
+      audio_url: audio,
       case_id: t.case_id || t.caseId,
       updated_at: t.updated_at || t.updatedAt,
       order_index: t.order_index ?? t.orderIndex,
@@ -296,6 +316,8 @@ const migrate_data = (old_data: any): AppData => {
     profiles: (old_data.profiles || []).map(migrate_profile),
     site_finances: (old_data.site_finances || []).map(migrate_site_finance),
     audit_logs: old_data.audit_logs || [],
+    voice_tasks: old_data.voice_tasks || [],
+    voice_task_recipients: old_data.voice_task_recipients || [],
   };
 };
 
@@ -423,7 +445,7 @@ export const useSupabaseData = (
               if ('caches' in window) {
                   const cacheNames = await caches.keys();
                   for (let name of cacheNames) {
-                      if (name !== 'lawyer-app-cache-v2026-04-30') { // Keep specific versions if needed, or clear all
+                      if (name !== 'lawyer-app-cache-v2026-11-03') { // Keep specific versions if needed, or clear all
                           await caches.delete(name);
                       }
                   }
@@ -1483,6 +1505,7 @@ export const useSupabaseData = (
     effective_user_id: effective_user_id,
     permissions: current_user_permissions,
     user_id: user?.id || "",
+    user: user,
     is_online: is_online,
     is_auto_sync_enabled: is_auto_sync_enabled,
     set_auto_sync_enabled: set_auto_sync_enabled,
@@ -1506,6 +1529,39 @@ export const useSupabaseData = (
       set_user_approval_alerts((p) => p.filter((a) => a.id !== id)),
     admin_viewing_user_id,
     set_admin_viewing_user_id,
+    addVoiceTask: async (
+      blob: Blob,
+      title: string,
+      recipientIds: string[]
+    ) => {
+      if (!user) return;
+      const supabase = get_supabase_client();
+      if (!supabase) return;
+
+      const taskId = generateId();
+      const storagePath = `${user.id}/${taskId}.webm`;
+      
+      // 1. Upload to Storage
+      await supabase.storage.from("voice_tasks").upload(storagePath, blob);
+      
+      // 2. Insert Task
+      await supabase.from("voice_tasks").insert({
+        id: taskId,
+        sender_id: user.id,
+        title: title,
+        storage_path: storagePath,
+      });
+      
+      // 3. Insert Recipients
+      const recipients = recipientIds.map(rId => ({
+        voice_task_id: taskId,
+        recipient_id: rId,
+      }));
+      await supabase.from("voice_task_recipients").insert(recipients);
+      
+      // Refresh
+      await fetch_and_refresh();
+    },
     set_clients: (clients: any) => {
       const now = new Date().toISOString();
       set_full_data((prev) => {
@@ -1708,15 +1764,31 @@ export const useSupabaseData = (
         ),
       }));
     },
-    delete_session: (
+    delete_session: async (
       client_id: string,
       case_id: string,
       stage_id: string,
       session_id: string,
     ) => {
+      // 1. Audit log
+      const client = data.clients.find((c) => c.id === client_id);
+      const caseItem = client?.cases.find((cs) => cs.id === case_id);
+      const stage = caseItem?.stages.find((st) => st.id === stage_id);
+      const session = stage?.sessions.find((s) => s.id === session_id);
+      if (session && user?.id) {
+        logActivity(
+          user.id,
+          "DELETE",
+          "session",
+          session_id,
+          `حذف جلسة: ${session.date || ""} (قضية: ${caseItem?.subject || case_id})`,
+        );
+      }
+
+      // 2. Immediate local React state update
       set_deleted_ids((prev) => ({
         ...prev,
-        sessions: [...prev.sessions, session_id],
+        sessions: [...(prev.sessions || []), session_id],
       }));
       set_full_data((prev) => ({
         ...prev,
@@ -1745,6 +1817,67 @@ export const useSupabaseData = (
             : c,
         ),
       }));
+
+      // 3. Immediately persist updated deleted_ids to IndexedDB
+      try {
+        const db = await get_db();
+        const storage_key = get_app_data_key(user?.id || null);
+        const current_del =
+          (await db.get(DELETED_IDS_STORE_NAME, storage_key)) ||
+          get_initial_deleted_ids();
+        if (!current_del.sessions) current_del.sessions = [];
+        if (!current_del.sessions.includes(session_id)) {
+          current_del.sessions.push(session_id);
+          await db.put(DELETED_IDS_STORE_NAME, current_del, storage_key);
+        }
+      } catch (idbErr) {
+        console.error("Failed to persist session deletion to IndexedDB:", idbErr);
+      }
+
+      // 4. Immediately delete from Supabase if online
+      if (is_online) {
+        const user_id_to_use = effective_user_id || user?.id || "";
+        const now = new Date().toISOString();
+        const deletions_log = [
+          {
+            table_name: "sessions",
+            record_id: session_id,
+            user_id: user_id_to_use,
+            deleted_at: now,
+          },
+        ];
+
+        if (user?.id && user.id !== user_id_to_use) {
+          deletions_log.push({
+            table_name: "sessions",
+            record_id: session_id,
+            user_id: user.id,
+            deleted_at: now,
+          });
+        }
+
+        // Direct service deletion (guarantees bypassing any RLS constraints)
+        try {
+          const serviceSupabase = get_service_supabase_client();
+          if (serviceSupabase) {
+            await serviceSupabase.from("sessions").delete().eq("id", session_id);
+            await serviceSupabase.from("sync_deletions").insert(deletions_log);
+          }
+        } catch (servDelErr) {
+          console.warn("Direct service delete warning for session:", servDelErr);
+        }
+
+        // Standard client deletion
+        try {
+          const supabase = get_supabase_client();
+          if (supabase) {
+            await supabase.from("sessions").delete().eq("id", session_id);
+            await supabase.from("sync_deletions").insert(deletions_log);
+          }
+        } catch (stdDelErr) {
+          console.warn("Direct standard delete warning for session:", stdDelErr);
+        }
+      }
     },
     delete_admin_task: (id: string) => {
       const task = data.admin_tasks.find((t) => t.id === id);
