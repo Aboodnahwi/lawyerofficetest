@@ -31,12 +31,16 @@ interface ClientsPageProps {
   on_open_admin_task_modal: (initialData?: any) => void;
   show_context_menu: (event: React.MouseEvent, menuItems: MenuItem[]) => void;
   on_create_invoice: (clientId: string, caseId?: string) => void;
+  selected_case_id?: { client_id: string; case_id: string } | null;
+  clear_selected_case?: () => void;
 }
 
 const ClientsPage: React.FC<ClientsPageProps> = ({
   show_context_menu,
   on_open_admin_task_modal,
   on_create_invoice,
+  selected_case_id,
+  clear_selected_case,
 }) => {
   const {
     clients,
@@ -64,43 +68,24 @@ const ClientsPage: React.FC<ClientsPageProps> = ({
   const [sort_option, set_sort_option] = React.useState<
     "name" | "most_active" | "date_added" | "last_modified"
   >(() => (localStorage.getItem("clients_sort_option") as any) || "name");
-
-  React.useEffect(() => {
-    localStorage.setItem("clients_sort_option", sort_option);
-  }, [sort_option]);
-
   const debounced_search_query = useDebounce(search_query, 300);
   const [view_mode, set_view_mode] = React.useState<"tree" | "list">("tree");
-  const [is_delete_case_modal_open, set_is_delete_case_modal_open] =
-    React.useState(false);
-  const [case_to_delete, set_case_to_delete] = React.useState<{
-    case_id: string;
-    client_id: string;
-    case_subject: string;
-  } | null>(null);
-  const [is_delete_client_modal_open, set_is_delete_client_modal_open] =
-    React.useState(false);
-  const [client_to_delete, set_client_to_delete] =
-    React.useState<Client | null>(null);
-  const [is_delete_stage_modal_open, set_is_delete_stage_modal_open] =
-    React.useState(false);
-  const [stage_to_delete, set_stage_to_delete] = React.useState<{
-    stage_id: string;
-    case_id: string;
-    client_id: string;
-    stage_info: string;
-  } | null>(null);
+  const [is_delete_client_modal_open, set_is_delete_client_modal_open] = React.useState(false);
+  const [client_to_delete, set_client_to_delete] = React.useState<Client | null>(null);
+  const [is_delete_case_modal_open, set_is_delete_case_modal_open] = React.useState(false);
+  const [case_to_delete, set_case_to_delete] = React.useState<any | null>(null);
+  const [is_delete_stage_modal_open, set_is_delete_stage_modal_open] = React.useState(false);
+  const [stage_to_delete, set_stage_to_delete] = React.useState<any | null>(null);
+  const is_contact_picker_supported = typeof window !== 'undefined' && 'contacts' in navigator && 'select' in (navigator as any).contacts;
 
-  // State for contact picker support
-  const [is_contact_picker_supported, set_is_contact_picker_supported] =
-    React.useState(false);
+  // State for navigating to a specific case from agenda
+  const [target_case_id, set_target_case_id] = React.useState<{ client_id: string; case_id: string } | null>(selected_case_id || null);
 
   React.useEffect(() => {
-    // Check if Contact Picker API is supported
-    set_is_contact_picker_supported(
-      "contacts" in navigator && "ContactsManager" in window,
-    );
-  }, []);
+    if (selected_case_id) {
+      set_target_case_id(selected_case_id);
+    }
+  }, [selected_case_id]);
 
   // State for printing logic
   const [is_print_choice_modal_open, set_is_print_choice_modal_open] =
@@ -1129,6 +1114,11 @@ const ClientsPage: React.FC<ClientsPageProps> = ({
             on_open_admin_task_modal={on_open_admin_task_modal}
             on_create_invoice={on_create_invoice}
             permissions={permissions}
+            target_case_id={target_case_id}
+            clear_target_case={() => {
+              set_target_case_id(null);
+              if (clear_selected_case) clear_selected_case();
+            }}
           />
         ) : (
           <ClientsListView

@@ -76,9 +76,14 @@ const Calendar: React.FC<CalendarProps> = ({
     daySessions.forEach((s) => {
       const isPostponed =
         s.is_postponed || !!s.stage_decision_date || !!s.next_session_date;
+      const isCaseOnHold =
+        (s as any).case_status === "on_hold" ||
+        (s as any).case_status === "closed";
 
       if (isPostponed) {
         postponedCount++;
+      } else if (isCaseOnHold) {
+        // قضية موقوفة المتابعة، لا تُحسب كجلسة غير مرحلة
       } else if (isPast) {
         unpostponedCount++;
       } else if (isCurrentDay) {

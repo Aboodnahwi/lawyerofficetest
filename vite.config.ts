@@ -14,6 +14,10 @@ export default defineConfig(({ mode }) => {
       alias: {
         "@": path.resolve("."),
       },
+      dedupe: ["react", "react-dom"],
+    },
+    optimizeDeps: {
+      include: ["react", "react-dom"],
     },
   };
 });

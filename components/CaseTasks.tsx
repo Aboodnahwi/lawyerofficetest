@@ -160,7 +160,7 @@ const CaseTasks: React.FC<CaseTasksProps> = ({ caseItem, clientName, onUpdateTas
                   <CheckCircleIcon className={`w-5 h-5 ${task.completed ? "text-green-500" : "text-gray-300"}`} />
                 </button>
                 <span className={`flex-grow ${task.completed ? "line-through text-gray-500" : ""}`}>
-                  {cleanTask}
+                  {cleanTask || (taskAudio ? "مهمة صوتية" : "مهمة")}
                 </span>
                 <button onClick={() => openEditModal(task)} className="p-1 hover:bg-gray-200 rounded">
                   <PencilIcon className="w-5 h-5 text-gray-500" />

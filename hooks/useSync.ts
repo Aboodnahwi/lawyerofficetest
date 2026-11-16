@@ -82,17 +82,36 @@ const construct_data = (flat_data: Partial<FlatData>): AppData => {
   (flat_data.cases || []).forEach((cs) => {
     const case_admin_tasks = (flat_data.admin_tasks || [])
       .filter((t: any) => t.case_id === cs.id)
-      .map((t: any) => ({
-        id: t.id,
-        task: t.task,
-        due_date: t.due_date,
-        completed: Boolean(t.completed),
-        importance: t.importance || "normal",
-        assignee: t.assignee,
-        image_url: t.image_url,
-        audio_url: t.audio_url,
-        updated_at: t.updated_at,
-      }));
+      .map((t: any) => {
+        let audio = t.audio_url;
+        let img = t.image_url;
+        let cleanTask = t.task || "";
+        if (!audio && cleanTask.includes("<!--AUDIO:")) {
+          const m = cleanTask.match(/<!--AUDIO:([\s\S]*?)-->/);
+          if (m) audio = m[1];
+        }
+        if (cleanTask.includes("<!--AUDIO:")) {
+          cleanTask = cleanTask.replace(/<!--AUDIO:[\s\S]*?-->/g, "").trim();
+        }
+        if (!img && cleanTask.includes("<!--IMG:")) {
+          const m = cleanTask.match(/<!--IMG:([\s\S]*?)-->/);
+          if (m) img = m[1];
+        }
+        if (cleanTask.includes("<!--IMG:")) {
+          cleanTask = cleanTask.replace(/<!--IMG:[\s\S]*?-->/g, "").trim();
+        }
+        return {
+          id: t.id,
+          task: cleanTask || (audio ? "مهمة صوتية" : (img ? "مهمة مصورة" : "مهمة إدارية")),
+          due_date: t.due_date,
+          completed: Boolean(t.completed),
+          importance: t.importance || "normal",
+          assignee: t.assignee,
+          image_url: img,
+          audio_url: audio,
+          updated_at: t.updated_at,
+        };
+      });
 
     const task_map = new Map<string, any>();
     (cs.tasks || []).forEach((t: any) => task_map.set(t.id, t));
@@ -137,7 +156,31 @@ const construct_data = (flat_data: Partial<FlatData>): AppData => {
     clients: (flat_data.clients || []).map(
       (c) => ({ ...c, cases: case_map.get(c.id) || [] }) as Client,
     ),
-    admin_tasks: (flat_data.admin_tasks || []) as any,
+    admin_tasks: (flat_data.admin_tasks || []).map((t: any) => {
+      let audio = t.audio_url;
+      let img = t.image_url;
+      let cleanTask = t.task || "";
+      if (!audio && cleanTask.includes("<!--AUDIO:")) {
+        const m = cleanTask.match(/<!--AUDIO:([\s\S]*?)-->/);
+        if (m) audio = m[1];
+      }
+      if (cleanTask.includes("<!--AUDIO:")) {
+        cleanTask = cleanTask.replace(/<!--AUDIO:[\s\S]*?-->/g, "").trim();
+      }
+      if (!img && cleanTask.includes("<!--IMG:")) {
+        const m = cleanTask.match(/<!--IMG:([\s\S]*?)-->/);
+        if (m) img = m[1];
+      }
+      if (cleanTask.includes("<!--IMG:")) {
+        cleanTask = cleanTask.replace(/<!--IMG:[\s\S]*?-->/g, "").trim();
+      }
+      return {
+        ...t,
+        task: cleanTask || (audio ? "مهمة صوتية" : (img ? "مهمة مصورة" : "مهمة إدارية")),
+        audio_url: audio,
+        image_url: img,
+      };
+    }) as any,
     appointments: (flat_data.appointments || []) as any,
     accounting_entries: (flat_data.accounting_entries || []) as any,
     assistants: (flat_data.assistants || []).map((a) => {
@@ -156,8 +199,8 @@ const construct_data = (flat_data: Partial<FlatData>): AppData => {
     profiles: (flat_data.profiles || []) as any,
     site_finances: (flat_data.site_finances || []) as any,
     audit_logs: (flat_data.audit_logs || []) as any,
-    voice_tasks: (flat_data as any).voice_tasks || [],
-    voice_task_recipients: (flat_data as any).voice_task_recipients || [],
+    voice_tasks: (flat_data.voice_tasks || []).map((vt: any) => ({ ...vt })) as any,
+    voice_task_recipients: (flat_data.voice_task_recipients || []) as any,
   };
 };
 
@@ -224,6 +267,8 @@ const merge_for_refresh = <T extends { id: any; updated_at?: Date | string }>(
           ...remote_item,
           image_url:
             (remote_item as any).image_url || (local_item as any).image_url,
+          audio_url:
+            (remote_item as any).audio_url || (local_item as any).audio_url,
           tasks: (remote_item as any).tasks || (local_item as any).tasks,
         };
         if (key === "case_documents") {
@@ -239,6 +284,8 @@ const merge_for_refresh = <T extends { id: any; updated_at?: Date | string }>(
           ...local_item,
           image_url:
             (local_item as any).image_url || (remote_item as any).image_url,
+          audio_url:
+            (local_item as any).audio_url || (remote_item as any).audio_url,
           tasks: (local_item as any).tasks || (remote_item as any).tasks,
         };
         final_items.set(id, merged);
@@ -249,10 +296,7 @@ const merge_for_refresh = <T extends { id: any; updated_at?: Date | string }>(
         local_item.updated_at || 0,
       ).getTime();
       const is_remotely_deleted =
-        (remote_deletion_ids && remote_deletion_ids.has(id)) ||
-        ((last_synced_time || 0) > 0 &&
-          local_date > 0 &&
-          local_date < (last_synced_time || 0) - 5000);
+        Boolean(remote_deletion_ids && remote_deletion_ids.has(id));
 
       if (!is_remotely_deleted) {
         final_items.set(id, local_item);
@@ -371,6 +415,11 @@ const apply_deletions_to_local = (
     appointments: filter_items(local_flat_data.appointments, "appointments"),
     assistants: filter_items(local_flat_data.assistants, "assistants"),
     site_finances: filter_items(local_flat_data.site_finances, "site_finances"),
+    voice_tasks: filter_items(local_flat_data.voice_tasks || [], "voice_tasks"),
+    voice_task_recipients: filter_items(
+      local_flat_data.voice_task_recipients || [],
+      "voice_task_recipients",
+    ),
     profiles: local_flat_data.profiles,
   };
 };
@@ -527,6 +576,8 @@ export const use_sync = ({
       site_finances: data.site_finances,
       audit_logs: data.audit_logs || [],
       sync_deletions: [], // Local data doesn't track deletions this way
+      voice_tasks: data.voice_tasks || [],
+      voice_task_recipients: data.voice_task_recipients || [],
     };
   };
 
@@ -747,7 +798,8 @@ export const use_sync = ({
           local_flat_data.appointments.length === 0 &&
           local_flat_data.accounting_entries.length === 0 &&
           local_flat_data.invoices.length === 0 &&
-          local_flat_data.case_documents.length === 0;
+          local_flat_data.case_documents.length === 0 &&
+          local_flat_data.voice_tasks.length === 0;
         const has_pending_deletions = Object.values(
           deleted_ids_ref.current,
         ).some((arr: any) => arr.length > 0);
@@ -864,6 +916,14 @@ export const use_sync = ({
             ...deleted_ids_ref.current.site_finances,
             ...remote_deletions_by_table.site_finances,
           ]),
+          voice_tasks: new Set([
+            ...(deleted_ids_ref.current.voice_tasks || []),
+            ...(remote_deletions_by_table.voice_tasks || []),
+          ]),
+          voice_task_recipients: new Set([
+            ...(deleted_ids_ref.current.voice_task_recipients || []),
+            ...(remote_deletions_by_table.voice_task_recipients || []),
+          ]),
         };
 
         for (const key of Object.keys(local_flat_data) as (keyof FlatData)[]) {
@@ -933,11 +993,12 @@ export const use_sync = ({
                 items_to_upsert.push(local_item);
                 final_merged_items.set(id, local_item);
               } else if (remote_date > local_date) {
-                // Remote is newer, take it but preserve local image_url & tasks if missing on remote
+                // Remote is newer, take it but preserve local image_url, audio_url & tasks if missing on remote
                 const merged = {
                   ...local_item,
                   ...remote_item,
                   image_url: remote_item.image_url || local_item.image_url,
+                  audio_url: remote_item.audio_url || local_item.audio_url,
                   tasks: remote_item.tasks || local_item.tasks,
                 };
                 if (key === "case_documents") {
@@ -948,11 +1009,12 @@ export const use_sync = ({
                 }
                 final_merged_items.set(id, merged);
               } else {
-                // Dates are equal, keep local to preserve local_state & image_url
+                // Dates are equal, keep local to preserve local_state & image_url & audio_url
                 const merged = {
                   ...remote_item,
                   ...local_item,
                   image_url: local_item.image_url || remote_item.image_url,
+                  audio_url: local_item.audio_url || remote_item.audio_url,
                   tasks: local_item.tasks || remote_item.tasks,
                 };
                 final_merged_items.set(id, merged);
@@ -976,11 +1038,7 @@ export const use_sync = ({
               // 2. OR this device has previously synced (storedLastSync > 0), and this item was updated
               //    before that last sync (local_date < storedLastSync - 5000), but is now missing from remote_map.
               //    This means it was deleted on the cloud or by another device, so it must not be resurrected.
-              const is_remotely_deleted =
-                remote_deletion_ids_set.has(id) ||
-                (storedLastSync > 0 &&
-                  local_date > 0 &&
-                  local_date < storedLastSync - 5000);
+              const is_remotely_deleted = remote_deletion_ids_set.has(id);
 
               if (!is_deleted && !is_remotely_deleted) {
                 // Genuinely new local offline item created after the last sync
@@ -1182,6 +1240,7 @@ export const use_sync = ({
                     ...item,
                     ...returned,
                     image_url: returned.image_url || item.image_url,
+                    audio_url: returned.audio_url || item.audio_url,
                     tasks: returned.tasks || item.tasks,
                   };
                 },
@@ -1278,6 +1337,8 @@ export const use_sync = ({
           documents: new Set(deleted_ids_ref.current.documents),
           profiles: new Set(deleted_ids_ref.current.profiles),
           site_finances: new Set(deleted_ids_ref.current.site_finances),
+          voice_tasks: new Set(deleted_ids_ref.current.voice_tasks || []),
+          voice_task_recipients: new Set(deleted_ids_ref.current.voice_task_recipients || []),
         };
 
         const remote_flat_data: Partial<FlatData> = {};

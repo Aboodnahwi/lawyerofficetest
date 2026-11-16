@@ -254,6 +254,12 @@ const App: React.FC<{ onRefresh: () => void }> = ({ onRefresh }) => {
     menuItems: [],
   });
   const [selectedDate, setSelectedDate] = useState(new Date());
+  const [selectedCaseForView, setSelectedCaseForView] = useState<{ client_id: string; case_id: string } | null>(null);
+
+  const handleNavigateToCase = (clientId: string, caseId: string) => {
+    setSelectedCaseForView({ client_id: clientId, case_id: caseId });
+    setCurrentPage("clients");
+  };
 
   const supabase = get_supabase_client();
   const data = useSupabaseData(session?.user ?? null, isAuthLoading);
@@ -948,6 +954,7 @@ const App: React.FC<{ onRefresh: () => void }> = ({ onRefresh }) => {
               main_view="agenda"
               selected_date={selectedDate}
               set_selected_date={setSelectedDate}
+              on_navigate_to_case={handleNavigateToCase}
             />
           )}
           {currentPage === "clients" && (
@@ -964,6 +971,8 @@ const App: React.FC<{ onRefresh: () => void }> = ({ onRefresh }) => {
                 })
               }
               on_create_invoice={() => {}}
+              selected_case_id={selectedCaseForView}
+              clear_selected_case={() => setSelectedCaseForView(null)}
             />
           )}
           {currentPage === "accounting" && (

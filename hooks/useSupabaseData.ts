@@ -45,7 +45,7 @@ import {
 } from "../utils/db";
 
 export const APP_DATA_KEY_PREFIX = "lawyerBusinessManagementData";
-export const APP_VERSION = "3-11-2026";
+export const APP_VERSION = "12-11-2026";
 export const get_app_data_key = (user_id: string | null) =>
   user_id ? `${APP_DATA_KEY_PREFIX}_${user_id}` : APP_DATA_KEY_PREFIX;
 
@@ -127,6 +127,10 @@ const migrate_data = (old_data: any): AppData => {
       if (cleanTask.includes("<!--AUDIO:")) {
         cleanTask = cleanTask.replace(/<!--AUDIO:[\s\S]*?-->/g, "").trim();
       }
+      if (!cleanTask) {
+        if (audio) cleanTask = "مهمة صوتية";
+        else if (img) cleanTask = "مهمة مصورة";
+      }
       return {
         id: t.id,
         task: cleanTask,
@@ -172,6 +176,10 @@ const migrate_data = (old_data: any): AppData => {
     }
     if (cleanTask.includes("<!--AUDIO:")) {
       cleanTask = cleanTask.replace(/<!--AUDIO:[\s\S]*?-->/g, "").trim();
+    }
+    if (!cleanTask) {
+      if (audio) cleanTask = "مهمة صوتية";
+      else if (img) cleanTask = "مهمة مصورة";
     }
     return {
       id: t.id,
@@ -445,7 +453,7 @@ export const useSupabaseData = (
               if ('caches' in window) {
                   const cacheNames = await caches.keys();
                   for (let name of cacheNames) {
-                      if (name !== 'lawyer-app-cache-v2026-11-03') { // Keep specific versions if needed, or clear all
+                      if (name !== 'lawyer-app-cache-v2026-11-12') { // Keep specific versions if needed, or clear all
                           await caches.delete(name);
                       }
                   }
@@ -1046,8 +1054,12 @@ export const useSupabaseData = (
         cs.stages.flatMap((st) =>
           st.sessions.map((s) => ({
             ...s,
+            client_id: c.id,
             client_name: s.client_name || c.name,
             opponent_name: s.opponent_name || cs.opponent_name,
+            case_id: cs.id,
+            case_subject: cs.subject,
+            case_status: (cs.status || "active") as "active" | "closed" | "on_hold",
             case_number: s.case_number || st.case_number || cs.subject || cs.id,
             court: s.court || st.court || "غير محدد",
             stage_id: s.stage_id || st.id,
@@ -1061,7 +1073,12 @@ export const useSupabaseData = (
 
   const unpostponed_sessions = React.useMemo(() => {
     return all_sessions.filter(
-      (s) => !s.is_postponed && !s.stage_decision_date && !s.next_session_date,
+      (s) =>
+        !s.is_postponed &&
+        !s.stage_decision_date &&
+        !s.next_session_date &&
+        s.case_status !== "on_hold" &&
+        s.case_status !== "closed",
     );
   }, [all_sessions]);
 
@@ -1972,6 +1989,45 @@ export const useSupabaseData = (
     download_document_file,
     get_document_file,
     postpone_session,
+    toggle_case_hold: (case_id: string) => {
+      let currentStatus: string = "active";
+      let targetClient: Client | undefined;
+      for (const cl of data.clients) {
+        const found = cl.cases.find((cs) => cs.id === case_id);
+        if (found) {
+          currentStatus = found.status || "active";
+          targetClient = cl;
+          break;
+        }
+      }
+      const newStatus = currentStatus === "on_hold" ? "active" : "on_hold";
+      if (targetClient && user?.id) {
+        logActivity(
+          user.id,
+          "UPDATE",
+          "case",
+          case_id,
+          newStatus === "on_hold" ? "وقف متابعة القضية" : "استئناف متابعة القضية",
+        );
+      }
+      set_full_data((prev) => ({
+        ...prev,
+        clients: prev.clients.map((c) => ({
+          ...c,
+          updated_at: new Date().toISOString(),
+          cases: c.cases.map((cs) =>
+            cs.id === case_id
+              ? {
+                  ...cs,
+                  status: newStatus as any,
+                  updated_at: new Date().toISOString(),
+                }
+              : cs,
+          ),
+        })),
+      }));
+      return newStatus;
+    },
     audit_logs: data.audit_logs || [],
     log_activity: async (action: string, entity_type: string, entity_id?: string, details?: string) => {
       if (user?.id) {

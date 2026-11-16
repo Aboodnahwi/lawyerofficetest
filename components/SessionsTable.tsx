@@ -10,7 +10,15 @@ import {
   parse_input_date_string,
   safe_revive_date,
 } from "../utils/dateUtils";
-import { PencilIcon, TrashIcon, ScaleIcon, GavelIcon } from "./icons";
+import {
+  PencilIcon,
+  TrashIcon,
+  ScaleIcon,
+  GavelIcon,
+  PauseCircleIcon,
+  PlayCircleIcon,
+  FolderOpenIcon,
+} from "./icons";
 import { useFeedback } from "../context/FeedbackContext";
 
 interface SessionsTableProps {
@@ -25,6 +33,8 @@ interface SessionsTableProps {
   allowPostponingPastSessions?: boolean;
   stage?: Stage;
   onContextMenu?: (event: React.MouseEvent, session: Session) => void;
+  onToggleCaseHold?: (session: Session) => void;
+  onNavigateToCase?: (session: Session) => void;
 }
 
 const SessionsTable: React.FC<SessionsTableProps> = ({
@@ -39,6 +49,8 @@ const SessionsTable: React.FC<SessionsTableProps> = ({
   allowPostponingPastSessions = false,
   stage,
   onContextMenu,
+  onToggleCaseHold,
+  onNavigateToCase,
 }) => {
   const { confirm } = useFeedback();
   const [postponeData, setPostponeData] = React.useState<
@@ -269,6 +281,7 @@ const SessionsTable: React.FC<SessionsTableProps> = ({
         </thead>
         <tbody>
           {sessions.map((s) => {
+            const isCaseOnHold = (s as any).case_status === "on_hold";
             const isStageDecided = stage
               ? !!stage.decision_date
               : !!s.stage_decision_date;
@@ -277,20 +290,26 @@ const SessionsTable: React.FC<SessionsTableProps> = ({
             const isOverdue =
               is_before_today(s.date) &&
               !isEffectivelyPostponed &&
-              !isStageDecided;
+              !isStageDecided &&
+              !isCaseOnHold;
             const isUpcoming =
               !is_before_today(s.date) &&
               !is_today(s.date) &&
               !isEffectivelyPostponed &&
-              !isStageDecided;
+              !isStageDecided &&
+              !isCaseOnHold;
             const isTodaySession =
-              is_today(s.date) && !isEffectivelyPostponed && !isStageDecided;
+              is_today(s.date) &&
+              !isEffectivelyPostponed &&
+              !isStageDecided &&
+              !isCaseOnHold;
 
-            // IMPORTANT: Only show postponement fields if onPostpone is provided AND other conditions met
+            // IMPORTANT: Only show postponement fields if onPostpone is provided AND not on hold AND other conditions met
             const showPostponeFields =
               !!onPostpone &&
               !isEffectivelyPostponed &&
               !isStageDecided &&
+              !isCaseOnHold &&
               (!is_before_today(s.date) || allowPostponingPastSessions);
             const isEditing = (field: keyof Session) =>
               onUpdate &&
@@ -311,7 +330,9 @@ const SessionsTable: React.FC<SessionsTableProps> = ({
                 onTouchStart={(e) => handleTouchStart(e, s)}
                 onTouchEnd={handleTouchEnd}
                 onTouchMove={handleTouchEnd}
-                className={`bg-white border-b hover:bg-gray-50 ${editingCell?.sessionId === s.id ? "bg-blue-50" : ""} ${isOverdue ? "bg-red-50/50" : ""} ${isTodaySession ? "bg-orange-50/60" : ""}`}
+                onDoubleClick={() => onNavigateToCase && onNavigateToCase(s)}
+                title="اضغط مرتين للانتقال إلى القضية مباشرة"
+                className={`bg-white border-b hover:bg-gray-50 cursor-pointer ${editingCell?.sessionId === s.id ? "bg-blue-50" : ""} ${isCaseOnHold ? "bg-amber-50/40" : ""} ${isOverdue ? "bg-red-50/50" : ""} ${isTodaySession ? "bg-orange-50/60" : ""}`}
               >
                 <td
                   className={`px-2 sm:px-6 py-4 ${cellClasses}`}
@@ -331,9 +352,31 @@ const SessionsTable: React.FC<SessionsTableProps> = ({
                         autoFocus
                       />
                     ) : (
-                      s.court
+                      <div className="flex items-center justify-between gap-1.5">
+                        <span>{s.court}</span>
+                        {onNavigateToCase && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onNavigateToCase(s);
+                            }}
+                            onTouchStart={(e) => e.stopPropagation()}
+                            className="inline-flex items-center justify-center p-1 text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 active:bg-blue-200 border border-blue-200 rounded-md transition-colors flex-shrink-0 no-print"
+                            title="الانتقال إلى تفاصيل القضية"
+                            aria-label="الانتقال إلى تفاصيل القضية"
+                          >
+                            <FolderOpenIcon className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
                     )}
                     <div className="flex flex-wrap gap-1">
+                      {isCaseOnHold && (
+                        <span className="px-1.5 py-0.5 bg-amber-100 text-amber-800 border border-amber-300 text-[10px] rounded-md font-bold">
+                          غير متابعة (موقوفة)
+                        </span>
+                      )}
                       {isStageDecided && (
                         <span className="px-1.5 py-0.5 bg-gray-100 text-gray-700 text-[10px] rounded-md font-bold border border-gray-300">
                           حسمت
@@ -543,6 +586,41 @@ const SessionsTable: React.FC<SessionsTableProps> = ({
                           >
                             ترحيل
                           </button>
+                          {onToggleCaseHold && isCaseOnHold && (
+                            <button
+                              onClick={() => onToggleCaseHold(s)}
+                              className="px-3 py-2 bg-emerald-600 text-white hover:bg-emerald-700 font-semibold rounded-lg transition-colors flex items-center gap-1.5 shadow-sm"
+                              title="استئناف متابعة القضية"
+                            >
+                              <PlayCircleIcon className="w-4 h-4 text-white" />
+                              <span>استئناف المتابعة</span>
+                            </button>
+                          )}
+                          {onToggleCaseHold && !isCaseOnHold && (
+                            <button
+                              onClick={() => onToggleCaseHold(s)}
+                              className="px-2.5 py-2 bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-300 font-semibold rounded-lg transition-colors flex items-center gap-1"
+                              title="وقف المتابعة للقضية (اعتبار القضية غير متابعة ولا حاجة لترحيلها)"
+                            >
+                              <PauseCircleIcon className="w-4 h-4 text-amber-600" />
+                              <span className="text-xs">وقف المتابعة</span>
+                            </button>
+                          )}
+                          {onNavigateToCase && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onNavigateToCase(s);
+                              }}
+                              onTouchStart={(e) => e.stopPropagation()}
+                              className="p-2 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded-md transition-colors"
+                              aria-label="الانتقال إلى القضية"
+                              title="الانتقال إلى تفاصيل القضية"
+                            >
+                              <FolderOpenIcon className="w-4 h-4" />
+                            </button>
+                          )}
                           {onDecide && (
                             <button
                               onClick={() => onDecide(s)}
@@ -556,7 +634,8 @@ const SessionsTable: React.FC<SessionsTableProps> = ({
                             <button
                               onClick={() => onEdit(s)}
                               className="p-2 text-gray-500 hover:text-blue-600"
-                              aria-label="تعديل"
+                              aria-label="تعديل الجلسة"
+                              title="تعديل الجلسة"
                             >
                               <PencilIcon className="w-4 h-4" />
                             </button>
@@ -584,7 +663,12 @@ const SessionsTable: React.FC<SessionsTableProps> = ({
                     <td
                       className={`px-2 sm:px-6 py-4 text-center no-print ${nextReasonCellClasses}`}
                     >
-                      {s.next_session_date ? (
+                      {isCaseOnHold ? (
+                        <span className="text-amber-800 font-bold bg-amber-50 px-2 py-0.5 rounded border border-amber-200 text-xs inline-flex items-center gap-1">
+                          <PauseCircleIcon className="w-3.5 h-3.5 text-amber-600" />
+                          <span>غير متابعة</span>
+                        </span>
+                      ) : s.next_session_date ? (
                         <span className="text-emerald-600 font-bold bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
                           {format_date(s.next_session_date)}
                         </span>
@@ -600,7 +684,9 @@ const SessionsTable: React.FC<SessionsTableProps> = ({
                         handleCellClick(s, "next_postponement_reason")
                       }
                     >
-                      {isEditing("next_postponement_reason") ? (
+                      {isCaseOnHold ? (
+                        <span className="text-xs text-amber-700 font-medium">موقوفة المتابعة (لا حاجة لترحيلها)</span>
+                      ) : isEditing("next_postponement_reason") ? (
                         <input
                           type="text"
                           value={edit_value || ""}
@@ -615,35 +701,67 @@ const SessionsTable: React.FC<SessionsTableProps> = ({
                       )}
                     </td>
                     <td className="px-2 sm:px-6 py-4 text-center no-print">
-                      {onEdit || onDelete ? (
-                        <div className="flex items-center justify-center gap-2">
-                          {onEdit && (
-                            <button
-                              onClick={() => onEdit(s)}
-                              className="p-2 text-gray-500 hover:text-blue-600"
-                              aria-label="تعديل"
-                            >
-                              <PencilIcon className="w-4 h-4" />
-                            </button>
-                          )}
-                          {onDelete && (
-                            <button
-                              onClick={() => handleDeleteClick(s)}
-                              className="p-2 text-gray-500 hover:text-red-600"
-                              aria-label="حذف"
-                            >
-                              <TrashIcon className="w-4 h-4" />
-                            </button>
-                          )}
-                        </div>
-                      ) : isStageDecided ? (
-                        <GavelIcon
-                          className="w-5 h-5 text-green-600 mx-auto"
-                          title="تم حسم المرحلة"
-                        />
-                      ) : (
-                        "-"
-                      )}
+                      <div className="flex items-center justify-center gap-2 flex-wrap">
+                        {onToggleCaseHold && isCaseOnHold && (
+                          <button
+                            onClick={() => onToggleCaseHold(s)}
+                            className="px-2.5 py-1 text-xs font-semibold bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded-lg border border-emerald-300 transition-colors flex items-center gap-1"
+                            title="استئناف متابعة القضية"
+                          >
+                            <PlayCircleIcon className="w-4 h-4 text-emerald-600" />
+                            <span>استئناف المتابعة</span>
+                          </button>
+                        )}
+                        {onToggleCaseHold && !isCaseOnHold && !showPostponeFields && (
+                          <button
+                            onClick={() => onToggleCaseHold(s)}
+                            className="p-2 text-gray-500 hover:text-amber-600 hover:bg-amber-50 rounded-lg border border-transparent hover:border-amber-200 transition-colors"
+                            title="وقف المتابعة للقضية"
+                          >
+                            <PauseCircleIcon className="w-4 h-4" />
+                          </button>
+                        )}
+                        {onNavigateToCase && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onNavigateToCase(s);
+                            }}
+                            onTouchStart={(e) => e.stopPropagation()}
+                            className="p-2 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded-md transition-colors"
+                            aria-label="الانتقال إلى القضية"
+                            title="الانتقال إلى تفاصيل القضية"
+                          >
+                            <FolderOpenIcon className="w-4 h-4" />
+                          </button>
+                        )}
+                        {onEdit && (
+                          <button
+                            onClick={() => onEdit(s)}
+                            className="p-2 text-gray-500 hover:text-blue-600"
+                            aria-label="تعديل الجلسة"
+                            title="تعديل الجلسة"
+                          >
+                            <PencilIcon className="w-4 h-4" />
+                          </button>
+                        )}
+                        {onDelete && (
+                          <button
+                            onClick={() => handleDeleteClick(s)}
+                            className="p-2 text-gray-500 hover:text-red-600"
+                            aria-label="حذف"
+                          >
+                            <TrashIcon className="w-4 h-4" />
+                          </button>
+                        )}
+                        {!onEdit && !onDelete && !isCaseOnHold && isStageDecided && (
+                          <GavelIcon
+                            className="w-5 h-5 text-green-600 mx-auto"
+                            title="تم حسم المرحلة"
+                          />
+                        )}
+                      </div>
                     </td>
                   </>
                 )}

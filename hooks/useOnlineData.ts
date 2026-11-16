@@ -31,6 +31,8 @@ export type FlatData = {
   site_finances: SiteFinancialEntry[];
   audit_logs: AuditLogEntry[];
   sync_deletions: SyncDeletion[];
+  voice_tasks: any[];
+  voice_task_recipients: any[];
 };
 
 export const check_supabase_schema = async () => {
@@ -177,7 +179,12 @@ export const fetch_data_from_supabase = async (
 
     if (all_user_ids && all_user_ids.length > 0) {
       // Specific user backup (including assistants if applicable)
-      if (table !== "profiles" && table !== "assistants") {
+      if (
+        table !== "profiles" &&
+        table !== "assistants" &&
+        table !== "voice_tasks" &&
+        table !== "voice_task_recipients"
+      ) {
         q = q.in("user_id", all_user_ids);
       }
       if (table === "assistants") {
@@ -186,11 +193,22 @@ export const fetch_data_from_supabase = async (
       if (table === "profiles") {
         q = q.in("id", all_user_ids);
       }
+      if (table === "voice_tasks") {
+        q = q.in("sender_id", all_user_ids);
+      }
+      if (table === "voice_task_recipients") {
+        q = q.in("recipient_id", all_user_ids);
+      }
     } else if (!effective_is_admin) {
       // Not admin and no user_id? Use passed user_id, or lawyer_id if available (for assistants), otherwise currentUser.id
       const user_id_to_query = user_id || lawyer_id || currentUser?.id;
       if (user_id_to_query) {
-        if (table !== "profiles" && table !== "assistants") {
+        if (
+          table !== "profiles" &&
+          table !== "assistants" &&
+          table !== "voice_tasks" &&
+          table !== "voice_task_recipients"
+        ) {
           q = q.eq("user_id", user_id_to_query);
         }
         if (table === "assistants") {
@@ -200,6 +218,12 @@ export const fetch_data_from_supabase = async (
           q = q.or(
             `id.eq.${user_id_to_query},lawyer_id.eq.${user_id_to_query}`,
           );
+        }
+        if (table === "voice_tasks") {
+          q = q.eq("sender_id", user_id_to_query);
+        }
+        if (table === "voice_task_recipients") {
+          q = q.eq("recipient_id", user_id_to_query);
         }
       }
     }
@@ -336,7 +360,9 @@ export const fetch_data_from_supabase = async (
         invoice_items,
         case_documents,
         site_finances,
-        sync_deletions
+        sync_deletions,
+        voice_tasks,
+        voice_task_recipients,
       ] = await run_in_batches([
         () => fetch_table("clients", all_user_ids),
         () => fetch_table("admin_tasks", all_user_ids),
@@ -350,7 +376,9 @@ export const fetch_data_from_supabase = async (
         () => fetch_table("invoice_items", all_user_ids),
         () => fetch_table("case_documents", all_user_ids),
         () => fetch_table("site_finances", all_user_ids),
-        () => fetch_table("sync_deletions", all_user_ids)
+        () => fetch_table("sync_deletions", all_user_ids),
+        () => fetch_table("voice_tasks", all_user_ids),
+        () => fetch_table("voice_task_recipients", all_user_ids),
       ], 5);
 
       // Profiles logic: If admin and no specific user request, fetch all.
@@ -409,6 +437,8 @@ export const fetch_data_from_supabase = async (
         profiles: profiles || [],
         site_finances,
         sync_deletions,
+        voice_tasks,
+        voice_task_recipients,
       };
     } catch (err: any) {
       attempt++;
@@ -564,6 +594,8 @@ export const delete_data_from_supabase = async (
     "assistants",
     "clients",
     "site_finances",
+    "voice_task_recipients",
+    "voice_tasks",
     "profiles",
   ];
 
@@ -645,6 +677,20 @@ export const delete_data_from_supabase = async (
   }
 };
 
+export const ensureVoiceTasksBucket = async (supabase: any) => {
+  try {
+    const { data: buckets } = await supabase.storage.listBuckets();
+    const exists = buckets?.some(
+      (b: any) => b.name === "voice_tasks" || b.id === "voice_tasks",
+    );
+    if (!exists) {
+      await supabase.storage.createBucket("voice_tasks", { public: true });
+    }
+  } catch (e) {
+    console.warn("Notice: ensureVoiceTasksBucket:", e);
+  }
+};
+
 export const upsert_data_to_supabase = async (
   data: Partial<FlatData>,
   user: User,
@@ -672,6 +718,40 @@ export const upsert_data_to_supabase = async (
   ];
   const is_admin_frontend =
     DESIGNATED_ADMIN_EMAILS.includes(user.email || "") || is_admin_user;
+
+  // Ensure public voice_tasks bucket exists in Supabase Storage
+  await ensureVoiceTasksBucket(supabase);
+
+  // Upload any local Base64 audio recordings to Supabase Storage before preparing payload
+  if (data.admin_tasks && data.admin_tasks.length > 0) {
+    for (let i = 0; i < data.admin_tasks.length; i++) {
+      const t = data.admin_tasks[i] as any;
+      if (
+        t.audio_url &&
+        typeof t.audio_url === "string" &&
+        t.audio_url.startsWith("data:audio/")
+      ) {
+        try {
+          const res = await fetch(t.audio_url);
+          const blob = await res.blob();
+          const fileName = `${user_id_to_use}/task_audio_${t.id}.webm`;
+          const { error: uploadErr } = await supabase.storage
+            .from("voice_tasks")
+            .upload(fileName, blob, { contentType: "audio/webm", upsert: true });
+          if (!uploadErr) {
+            const { data: pubData } = supabase.storage
+              .from("voice_tasks")
+              .getPublicUrl(fileName);
+            if (pubData?.publicUrl) {
+              t.audio_url = pubData.publicUrl;
+            }
+          }
+        } catch (e) {
+          console.warn("Could not upload task audio blob to storage, fallback to embedded:", e);
+        }
+      }
+    }
+  }
 
   const data_to_upsert = {
     clients: data.clients?.map((client) => ({
@@ -724,15 +804,39 @@ export const upsert_data_to_supabase = async (
     })),
     admin_tasks: data.admin_tasks?.map((task: any) => {
       let taskText = task.task || "";
+      let taskAudio = task.audio_url;
+      let taskImg = task.image_url;
+
+      // Extract existing embedded audio/img if present
+      if (!taskAudio && taskText.includes("<!--AUDIO:")) {
+        const m = taskText.match(/<!--AUDIO:([\s\S]*?)-->/);
+        if (m) taskAudio = m[1];
+      }
+      if (!taskImg && taskText.includes("<!--IMG:")) {
+        const m = taskText.match(/<!--IMG:([\s\S]*?)-->/);
+        if (m) taskImg = m[1];
+      }
+
+      // Strip existing tags to re-embed cleanly
       if (taskText.includes("<!--IMG:")) {
         taskText = taskText.replace(/<!--IMG:[\s\S]*?-->/g, "").trim();
       }
       if (taskText.includes("<!--AUDIO:")) {
         taskText = taskText.replace(/<!--AUDIO:[\s\S]*?-->/g, "").trim();
       }
-      if (task.audio_url && !taskText.includes("<!--AUDIO:")) {
-        taskText = `${taskText}\n<!--AUDIO:${task.audio_url}-->`;
+
+      // Always embed AUDIO and IMG tags into task text column
+      if (taskAudio) {
+        taskText = `${taskText}\n<!--AUDIO:${taskAudio}-->`;
       }
+      if (taskImg) {
+        taskText = `${taskText}\n<!--IMG:${taskImg}-->`;
+      }
+
+      if (!taskText.trim()) {
+        taskText = taskAudio ? "مهمة صوتية" : (taskImg ? "مهمة مصورة" : "مهمة إدارية");
+      }
+
       return {
         id: task.id,
         task: taskText,
@@ -741,8 +845,8 @@ export const upsert_data_to_supabase = async (
         importance: task.importance,
         assignee: task.assignee,
         location: task.location,
-        image_url: task.image_url,
-        audio_url: task.audio_url,
+        image_url: taskImg,
+        audio_url: taskAudio,
         updated_at: task.updated_at,
         order_index: task.order_index,
         task_type: task.task_type || "admin",
@@ -843,6 +947,21 @@ export const upsert_data_to_supabase = async (
       category: finance.category,
       user_id: finance.user_id || user_id_to_use,
       updated_at: finance.updated_at,
+    })),
+    voice_tasks: data.voice_tasks?.map((vt: any) => ({
+      id: vt.id,
+      sender_id: vt.sender_id || user_id_to_use,
+      title: vt.title,
+      storage_path: vt.storage_path,
+      created_at: vt.created_at || new Date().toISOString(),
+      updated_at: vt.updated_at || new Date().toISOString(),
+    })),
+    voice_task_recipients: data.voice_task_recipients?.map((vtr: any) => ({
+      id: vtr.id,
+      voice_task_id: vtr.voice_task_id,
+      recipient_id: vtr.recipient_id,
+      status: vtr.status || "pending",
+      updated_at: vtr.updated_at || new Date().toISOString(),
     })),
   };
 
@@ -1077,11 +1196,38 @@ export const upsert_data_to_supabase = async (
     data_to_upsert.case_documents,
   );
 
+  // Sanitize admin_tasks for Postgres schema (strip columns image_url, audio_url, case_id)
+  // because image and audio are safely embedded inside `task` text column as <!--IMG:...--> and <!--AUDIO:...-->
+  const admin_tasks_for_postgres = (data_to_upsert.admin_tasks || []).map((t: any) => {
+    const { image_url, audio_url, case_id, ...validCols } = t;
+    return validCols;
+  });
+
   // Sequentialize the rest to avoid lock stealing
-  results.admin_tasks = await upsert_table(
+  const upserted_admin_tasks = await upsert_table(
     "admin_tasks",
-    data_to_upsert.admin_tasks,
+    admin_tasks_for_postgres,
   );
+
+  // Re-attach audio_url and image_url extracted from task column so the local app state gets them
+  results.admin_tasks = (upserted_admin_tasks || []).map((t: any) => {
+    let img = undefined;
+    let audio = undefined;
+    let text = t.task || "";
+    if (text.includes("<!--IMG:")) {
+      const m = text.match(/<!--IMG:([\s\S]*?)-->/);
+      if (m) img = m[1];
+    }
+    if (text.includes("<!--AUDIO:")) {
+      const m = text.match(/<!--AUDIO:([\s\S]*?)-->/);
+      if (m) audio = m[1];
+    }
+    return {
+      ...t,
+      image_url: img,
+      audio_url: audio,
+    };
+  });
   results.appointments = await upsert_table(
     "appointments",
     data_to_upsert.appointments,
@@ -1098,6 +1244,14 @@ export const upsert_data_to_supabase = async (
   } else {
     results.site_finances = [];
   }
+  results.voice_tasks = await upsert_table(
+    "voice_tasks",
+    data_to_upsert.voice_tasks,
+  );
+  results.voice_task_recipients = await upsert_table(
+    "voice_task_recipients",
+    data_to_upsert.voice_task_recipients,
+  );
 
   return results;
 };
@@ -1130,6 +1284,10 @@ export const transform_remote_to_local = (remote: any): Partial<FlatData> => {
       if (cleanTask.includes("<!--AUDIO:")) {
         cleanTask = cleanTask.replace(/<!--AUDIO:[\s\S]*?-->/g, "").trim();
       }
+      if (!cleanTask) {
+        if (audio) cleanTask = "مهمة صوتية";
+        else if (img) cleanTask = "مهمة مصورة";
+      }
       return {
         ...task,
         task: cleanTask,
@@ -1147,5 +1305,7 @@ export const transform_remote_to_local = (remote: any): Partial<FlatData> => {
     profiles: remote.profiles || [],
     site_finances: remote.site_finances || [],
     sync_deletions: remote.sync_deletions || [],
+    voice_tasks: remote.voice_tasks || [],
+    voice_task_recipients: remote.voice_task_recipients || [],
   };
 };

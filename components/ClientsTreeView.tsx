@@ -78,6 +78,8 @@ interface ClientsTreeViewProps {
   on_open_admin_task_modal: (initialData?: any) => void;
   on_create_invoice: (clientId: string, caseId?: string) => void;
   permissions?: Permissions;
+  target_case_id?: { client_id: string; case_id: string } | null;
+  clear_target_case?: () => void;
 }
 
 const StageItem: React.FC<{
@@ -680,15 +682,40 @@ const CaseItemContainer: React.FC<{
   client: Client;
   props: ClientsTreeViewProps;
 }> = ({ caseItem, client, props }) => {
-  const [isExpanded, setIsExpanded] = React.useState(false);
+  const isTargetCase =
+    props.target_case_id?.client_id === client.id &&
+    props.target_case_id?.case_id === caseItem.id;
+
+  const [isExpanded, setIsExpanded] = React.useState(isTargetCase);
+  const containerRef = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    if (isTargetCase) {
+      setIsExpanded(true);
+      const timer = setTimeout(() => {
+        containerRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      }, 250);
+      return () => clearTimeout(timer);
+    }
+  }, [isTargetCase]);
+
   return (
-    <CaseItem
-      caseItem={caseItem}
-      client={client}
-      props={props}
-      expanded={isExpanded}
-      onToggle={() => setIsExpanded(!isExpanded)}
-    />
+    <div
+      ref={containerRef}
+      className={
+        isTargetCase
+          ? "ring-2 ring-blue-500 rounded-lg shadow-md transition-all duration-500"
+          : ""
+      }
+    >
+      <CaseItem
+        caseItem={caseItem}
+        client={client}
+        props={props}
+        expanded={isExpanded}
+        onToggle={() => setIsExpanded(!isExpanded)}
+      />
+    </div>
   );
 };
 
@@ -843,7 +870,22 @@ const ClientItem: React.FC<{
 };
 
 const ClientsTreeView: React.FC<ClientsTreeViewProps> = (props) => {
-  const [expandedId, setExpandedId] = React.useState<string | null>(null);
+  const [expandedId, setExpandedId] = React.useState<string | null>(() => {
+    if (props.target_case_id) {
+      const client = props.clients.find((c) => c.id === props.target_case_id?.client_id);
+      if (client) return client.id;
+    }
+    return null;
+  });
+
+  React.useEffect(() => {
+    if (props.target_case_id) {
+      const client = props.clients.find((c) => c.id === props.target_case_id?.client_id);
+      if (client) {
+        setExpandedId(client.id);
+      }
+    }
+  }, [props.target_case_id, props.clients]);
 
   const toggle = (id: string) => {
     setExpandedId((prevId) => (prevId === id ? null : id));
@@ -859,15 +901,18 @@ const ClientsTreeView: React.FC<ClientsTreeViewProps> = (props) => {
 
   return (
     <div className="p-4 space-y-4">
-      {props.clients.map((client) => (
-        <ClientItem
-          key={client.id}
-          client={client}
-          props={props}
-          expanded={expandedId === client.id}
-          onToggle={() => toggle(client.id)}
-        />
-      ))}
+      {props.clients.map((client) => {
+        const isTargetClient = props.target_case_id?.client_id === client.id;
+        return (
+          <ClientItem
+            key={client.id}
+            client={client}
+            props={props}
+            expanded={expandedId === client.id}
+            onToggle={() => toggle(client.id)}
+          />
+        );
+      })}
     </div>
   );
 };

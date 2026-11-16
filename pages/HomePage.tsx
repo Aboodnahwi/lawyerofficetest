@@ -29,6 +29,9 @@ import {
   ListBulletIcon,
   ViewColumnsIcon,
   MicrophoneIcon,
+  PauseCircleIcon,
+  PlayCircleIcon,
+  FolderOpenIcon,
 } from "../components/icons";
 import AudioPlayer from "../components/AudioPlayer";
 import SessionsTable from "../components/SessionsTable";
@@ -207,6 +210,7 @@ interface HomePageProps {
   main_view: "agenda" | "admin_tasks";
   selected_date: Date;
   set_selected_date: (date: Date) => void;
+  on_navigate_to_case?: (clientId: string, caseId: string) => void;
 }
 
 const HomePage: React.FC<HomePageProps> = ({
@@ -215,6 +219,7 @@ const HomePage: React.FC<HomePageProps> = ({
   main_view,
   selected_date,
   set_selected_date,
+  on_navigate_to_case,
 }) => {
   const {
     appointments,
@@ -334,6 +339,96 @@ const HomePage: React.FC<HomePageProps> = ({
       }
     }
     return null;
+  };
+
+  const handle_toggle_case_hold = (session: Session) => {
+    const context = find_session_context(session.id);
+    if (!context || !context.caseItem) {
+      showFeedback("لم يتم العثور على بيانات القضية.", "error");
+      return;
+    }
+
+    const { client, caseItem } = context;
+    const isCurrentlyOnHold = caseItem.status === "on_hold";
+
+    if (isCurrentlyOnHold) {
+      confirm({
+        title: "استئناف متابعة القضية",
+        message: `هل تريد استئناف متابعة قضية "${caseItem.subject || caseItem.id}" (الموكل: ${client.name} ضد ${caseItem.opponent_name}) وإعادتها للقضايا النشطة الجارية؟`,
+        confirmText: "نعم، استئناف المتابعة",
+        cancelText: "إلغاء",
+        variant: "default",
+        onConfirm: () => {
+          set_clients((prev) =>
+            prev.map((c) =>
+              c.id === client.id
+                ? {
+                    ...c,
+                    updated_at: new Date().toISOString(),
+                    cases: c.cases.map((cs) =>
+                      cs.id === caseItem.id
+                        ? {
+                            ...cs,
+                            status: "active",
+                            updated_at: new Date().toISOString(),
+                          }
+                        : cs,
+                    ),
+                  }
+                : c,
+            ),
+          );
+          showFeedback(
+            `تم استئناف متابعة قضية "${caseItem.subject}" بنجاح.`,
+            "success",
+          );
+          set_session_modal({ is_open: false, session: null, stage: null, caseItem: null, client: null });
+        },
+      });
+    } else {
+      confirm({
+        title: "وقف متابعة القضية",
+        message: `هل أنت متأكد من وقف متابعة قضية "${caseItem.subject || caseItem.id}" (الموكل: ${client.name} ضد ${caseItem.opponent_name})؟\n\nستعتبر القضية غير متابعة، ولن تظهر جلساتها بعد الآن في الجلسات غير المرحلة ولا حاجة لترحيلها.`,
+        confirmText: "نعم، وقف المتابعة",
+        cancelText: "إلغاء",
+        variant: "danger",
+        onConfirm: () => {
+          set_clients((prev) =>
+            prev.map((c) =>
+              c.id === client.id
+                ? {
+                    ...c,
+                    updated_at: new Date().toISOString(),
+                    cases: c.cases.map((cs) =>
+                      cs.id === caseItem.id
+                        ? {
+                            ...cs,
+                            status: "on_hold",
+                            updated_at: new Date().toISOString(),
+                          }
+                        : cs,
+                    ),
+                  }
+                : c,
+            ),
+          );
+          showFeedback(
+            `تم وقف متابعة قضية "${caseItem.subject}" بنجاح، ولن تظهر في الجلسات غير المرحلة.`,
+            "success",
+          );
+          set_session_modal({ is_open: false, session: null, stage: null, caseItem: null, client: null });
+        },
+      });
+    }
+  };
+
+  const handle_navigate_to_case = (session: Session) => {
+    const context = find_session_context(session.id);
+    if (context && context.client && context.caseItem && on_navigate_to_case) {
+      on_navigate_to_case(context.client.id, context.caseItem.id);
+    } else {
+      showFeedback("تعذر الانتقال إلى تفاصيل القضية.", "error");
+    }
   };
 
   const handle_edit_session = (session: Session) => {
@@ -1043,7 +1138,26 @@ const HomePage: React.FC<HomePageProps> = ({
         `*سبب التأجيل السابق:* ${session.postponement_reason || "لا يوجد"}`,
       ].join("\n");
     }
+    const isCaseOnHold = (session as any).case_status === "on_hold" || caseItem?.status === "on_hold";
     const menuItems: MenuItem[] = [
+      {
+        label: "الانتقال إلى تفاصيل القضية",
+        icon: <FolderOpenIcon className="w-4 h-4 text-blue-600" />,
+        onClick: () => {
+          handle_navigate_to_case(session);
+        },
+      },
+      {
+        label: isCaseOnHold ? "استئناف متابعة القضية" : "وقف المتابعة للقضية",
+        icon: isCaseOnHold ? (
+          <PlayCircleIcon className="w-4 h-4 text-emerald-600" />
+        ) : (
+          <PauseCircleIcon className="w-4 h-4 text-amber-600" />
+        ),
+        onClick: () => {
+          handle_toggle_case_hold(session);
+        },
+      },
       {
         label: "إرسال إلى المهام الإدارية",
         icon: <BuildingLibraryIcon className="w-4 h-4" />,
@@ -1283,7 +1397,7 @@ const HomePage: React.FC<HomePageProps> = ({
               <p
                 className={`font-medium text-base whitespace-pre-wrap ${task.completed ? "line-through text-gray-500" : "text-gray-900"}`}
               >
-                {cleanTaskText}
+                {cleanTaskText || (taskAudio ? "مهمة صوتية" : "مهمة إدارية")}
               </p>
               {taskAudio && (
                 <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200">
@@ -1520,6 +1634,7 @@ const HomePage: React.FC<HomePageProps> = ({
                         )}
                         allowPostponingPastSessions={true}
                         onContextMenu={handle_session_context_menu}
+                        onNavigateToCase={handle_navigate_to_case}
                       />
                     </div>
                     <AppointmentsTable
@@ -1575,6 +1690,7 @@ const HomePage: React.FC<HomePageProps> = ({
                       allowPostponingPastSessions={true}
                       showSessionDate={true}
                       onContextMenu={handle_session_context_menu}
+                      onNavigateToCase={handle_navigate_to_case}
                     />
                   </div>
                 )}
@@ -1607,6 +1723,7 @@ const HomePage: React.FC<HomePageProps> = ({
                       )}
                       showSessionDate={true}
                       onContextMenu={handle_session_context_menu}
+                      onNavigateToCase={handle_navigate_to_case}
                     />
                   </div>
                 )}
@@ -2366,6 +2483,31 @@ const HomePage: React.FC<HomePageProps> = ({
                   rows={2}
                 ></textarea>
               </div>
+
+              {session_modal.caseItem && (
+                <div className="pt-2 border-t border-gray-100">
+                  {session_modal.caseItem.status === "on_hold" ? (
+                    <button
+                      type="button"
+                      onClick={() => handle_toggle_case_hold(session_modal.session!)}
+                      className="w-full px-4 py-2.5 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-300 font-semibold rounded-lg transition-colors flex items-center justify-center gap-2"
+                    >
+                      <PlayCircleIcon className="w-5 h-5 text-emerald-600" />
+                      <span>استئناف متابعة القضية</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => handle_toggle_case_hold(session_modal.session!)}
+                      className="w-full px-4 py-2.5 bg-amber-50 text-amber-800 hover:bg-amber-100 border border-amber-300 font-semibold rounded-lg transition-colors flex items-center justify-center gap-2"
+                      title="وقف المتابعة للقضية (اعتبار القضية غير متابعة ولا حاجة لترحيلها)"
+                    >
+                      <PauseCircleIcon className="w-5 h-5 text-amber-600" />
+                      <span>وقف المتابعة للقضية</span>
+                    </button>
+                  )}
+                </div>
+              )}
 
               <div className="mt-6 flex justify-end gap-4">
                 <button

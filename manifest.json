@@ -4,21 +4,21 @@
   "description": "تطبيق لإدارة أعمال مكاتب المحاماة بكفاءة.",
   "icons": [
     {
-      "src": "./icon.svg",
+      "src": "./icon-192.jpg",
       "sizes": "192x192",
-      "type": "image/svg+xml",
+      "type": "image/jpeg",
       "purpose": "any"
     },
     {
-      "src": "./icon.svg",
+      "src": "./icon-512.jpg",
       "sizes": "512x512",
-      "type": "image/svg+xml",
+      "type": "image/jpeg",
       "purpose": "any"
     },
     {
-      "src": "./icon.svg",
+      "src": "./icon-512.jpg",
       "sizes": "any",
-      "type": "image/svg+xml",
+      "type": "image/jpeg",
       "purpose": "maskable"
     }
   ],
